@@ -1,0 +1,14 @@
+{
+  "images": [
+    {
+      "id": "pixel-001",
+      "path": "assets/images/processed/pixel.png",
+      "tags": ["sample", "demo"],
+      "defaultAlt": "A single pixel used as a placeholder image.",
+      "width": 1,
+      "height": 1,
+      "bytes": 68,
+      "mime": "image/png"
+    }
+  ]
+}

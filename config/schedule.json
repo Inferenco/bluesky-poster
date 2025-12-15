@@ -1,0 +1,9 @@
+{
+  "posts_per_day": 3,
+  "default_images_per_post": 1,
+  "max_images_per_post": 4,
+  "quiet_hours_utc": ["23:00", "07:00"],
+  "random_jitter_minutes": 12,
+  "max_recent_image_ids": 40,
+  "max_recent_text_hashes": 80
+}
