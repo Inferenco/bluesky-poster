@@ -8,6 +8,8 @@ import { generatePost } from './generator.js';
 import { MAX_GRAPHEMES, countGraphemes, hashText } from './validate.js';
 import { BlueskyAuth, login, postWithImages } from './bluesky.js';
 import { BotState, ScheduleConfig, ensureToday, loadState, recordSuccess, saveState } from './state.js';
+import { checkSafety } from './safety.js';
+import { sendTelegramNotification } from './notify.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,6 +18,7 @@ const ROOT = path.resolve(__dirname, '..');
 async function main() {
   const schedule = await loadSchedule(ROOT);
   const now = new Date();
+  const dryRun = String(process.env.DRY_RUN || '').toLowerCase() === 'true';
 
   let state = await loadState(ROOT);
   state = ensureToday(state, now);
@@ -31,10 +34,15 @@ async function main() {
   }
 
   const queue = await loadQueue(ROOT);
-  const next = selectNext(queue, new Set(state.posted_ids));
-  if (!next) {
-    console.log('No active queue item to post');
+  const selection = selectNext(queue, state.posted_ids);
+  if (!selection) {
+    console.log('No active queue items to post');
     return;
+  }
+
+  const { item: next, isRecycled } = selection;
+  if (isRecycled) {
+    console.log(`Recycling topic "${next.id}" for fresh content generation`);
   }
 
   const manifest = await loadManifest(ROOT);
@@ -55,6 +63,20 @@ async function main() {
   const voice = await fs.readFile(path.join(ROOT, 'config', 'voice.md'), 'utf8');
   const generation = await generatePost({ voice, item: next, images });
 
+  // Safety check
+  const safetyResult = await checkSafety(ROOT, generation.text);
+  if (!safetyResult.safe) {
+    const errorMsg = `Generated text contains blocked phrase: "${safetyResult.blockedPhrase}"`;
+    console.error(errorMsg);
+    await sendTelegramNotification({
+      success: false,
+      postId: next.id,
+      error: errorMsg,
+      dryRun
+    });
+    return;
+  }
+
   const textHash = hashText(generation.text);
   if (state.recent_text_hashes.includes(textHash)) {
     console.log('Generated text duplicates recent post; exiting to avoid repeat.');
@@ -66,7 +88,6 @@ async function main() {
     : images.map((img) => img.defaultAlt);
 
   const auth = envAuth();
-  const dryRun = String(process.env.DRY_RUN || '').toLowerCase() === 'true';
 
   if (schedule.random_jitter_minutes > 0) {
     const jitterMs = Math.floor(Math.random() * schedule.random_jitter_minutes * 60 * 1000);
@@ -92,6 +113,12 @@ async function main() {
   });
 
   if (dryRun) {
+    await sendTelegramNotification({
+      success: true,
+      postId: next.id,
+      postText: generation.text,
+      dryRun: true
+    });
     return;
   }
 
@@ -113,6 +140,14 @@ async function main() {
 
   await saveState(ROOT, state);
   console.log('State updated.');
+
+  // Send success notification
+  await sendTelegramNotification({
+    success: true,
+    postId: next.id,
+    postText: generation.text,
+    dryRun: false
+  });
 }
 
 function isQuietHours(range: [string, string], now: Date): boolean {
@@ -156,7 +191,12 @@ async function verifyImageSizes(images: { path: string }[]): Promise<void> {
   }
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error(err);
+  await sendTelegramNotification({
+    success: false,
+    error: String(err)
+  });
   process.exitCode = 1;
 });
+

@@ -5,7 +5,9 @@
   "scripts": {
     "autopost": "tsx src/index.ts",
     "preprocess-images": "tsx scripts/preprocess-images.ts",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@atproto/api": "^0.13.21",
@@ -16,6 +18,7 @@
   "devDependencies": {
     "@types/node": "^20.12.12",
     "tsx": "^4.19.2",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "vitest": "^4.0.15"
   }
 }

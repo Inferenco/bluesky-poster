@@ -1,3 +1,11 @@
 id,topic,link,tags,cta,active,image_ids
-001,"Circle wallet multichain update","https://example.com","product;wallet;update","Try it today",true,
-002,"Dev tip: prompts that behave","https://example.com/docs","dev;ai;tips","More tomorrow",true,
+001,"Circle launches multichain wallet support - one app to rule them all","https://circle.com/wallet","product;wallet;crypto;multichain","Try the new wallet today",true,
+002,"Hot take: AI prompts fail because they're too vague. Specificity wins.","","dev;ai;tips;prompts","Thread on prompt engineering coming tomorrow",true,
+003,"The future of decentralized identity is here. ENS + DID = game changer","https://ens.domains","web3;identity;ens;did","Claim your ENS name",true,
+004,"Why every dev should learn Move in 2025 - the safety-first smart contract language","https://move-language.github.io","dev;move;blockchain;programming","Start learning Move today",true,
+005,"Gas fees down 90% on L2s. Still building on L1 mainnet? Time to reconsider.","https://l2beat.com","ethereum;l2;scaling;gas","Check the L2 stats",true,
+006,"Account abstraction is finally here. Smart wallets are about to change everything.","https://eips.ethereum.org/EIPS/eip-4337","ethereum;aa;wallets;ux","Learn about EIP-4337",true,
+007,"PSA: Your seed phrase is not a password. It's a master key. Treat it accordingly.","","security;crypto;tips","Stay safe out there",true,
+008,"Building in public: Week 3 of the autoposter project. 200 lines of TypeScript magic.","https://github.com/example/bluesky-poster","dev;buildinpublic;typescript","Star the repo",true,
+009,"The best code is code you don't write. Leverage existing libraries wisely.","","dev;tips;dx","Share your favorite npm packages",true,
+010,"Why I switched from X to Bluesky: Better signal, less noise, actual conversations.","","social;bluesky;community","Give Bluesky a try",true,

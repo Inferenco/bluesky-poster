@@ -12,6 +12,11 @@ export interface QueueItem {
   imageIds?: string[];
 }
 
+export interface SelectionResult {
+  item: QueueItem;
+  isRecycled: boolean;
+}
+
 export async function loadQueue(root: string): Promise<QueueItem[]> {
   const queuePath = path.join(root, 'content', 'queue.csv');
   const raw = await fs.readFile(queuePath, 'utf8');
@@ -38,6 +43,42 @@ export async function loadQueue(root: string): Promise<QueueItem[]> {
   }));
 }
 
-export function selectNext(queue: QueueItem[], postedIds: Set<string>): QueueItem | null {
-  return queue.find((item) => item.active && !postedIds.has(item.id)) || null;
+/**
+ * Select the next queue item to post.
+ * 
+ * Priority:
+ * 1. First active item NOT in postedIds (fresh content)
+ * 2. If all active items are posted, recycle: pick the OLDEST posted item
+ *    (the one that appears first in postedIds array for this queue)
+ * 
+ * This allows the queue to loop infinitely with fresh AI-generated content
+ * for the same topics.
+ */
+export function selectNext(queue: QueueItem[], postedIds: string[]): SelectionResult | null {
+  const postedSet = new Set(postedIds);
+  const activeItems = queue.filter((item) => item.active);
+
+  if (activeItems.length === 0) {
+    return null;
+  }
+
+  // Try to find an unposted item first
+  const fresh = activeItems.find((item) => !postedSet.has(item.id));
+  if (fresh) {
+    return { item: fresh, isRecycled: false };
+  }
+
+  // All active items have been posted — recycle the oldest one
+  // Find which active item was posted earliest (appears first in postedIds)
+  const activeIds = new Set(activeItems.map((i) => i.id));
+  for (const postedId of postedIds) {
+    if (activeIds.has(postedId)) {
+      const recycled = activeItems.find((i) => i.id === postedId)!;
+      return { item: recycled, isRecycled: true };
+    }
+  }
+
+  // Fallback: just pick the first active item
+  return { item: activeItems[0], isRecycled: true };
 }
+

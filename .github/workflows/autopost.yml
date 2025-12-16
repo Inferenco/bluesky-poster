@@ -29,6 +29,9 @@ jobs:
           BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
           BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TG_NOTIFY_LEVEL: ${{ vars.TG_NOTIFY_LEVEL }}
           DRY_RUN: ${{ vars.DRY_RUN }}
       - name: Commit state
         run: |

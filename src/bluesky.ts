@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { BskyAgent, type BlobRef } from '@atproto/api';
+import { BskyAgent, RichText, type BlobRef } from '@atproto/api';
 import { ImageAsset } from './images.js';
 
 export interface BlueskyAuth {
@@ -43,15 +43,20 @@ export async function postWithImages(agent: BskyAgent, payload: { text: string; 
     });
   }
 
+  // Use RichText to detect and create link facets
+  const rt = new RichText({ text: payload.text });
+  await rt.detectFacets(agent);
+
   const record = {
     $type: 'app.bsky.feed.post',
-    text: payload.text,
+    text: rt.text,
+    facets: rt.facets,
     createdAt: new Date().toISOString(),
     embed: {
       $type: 'app.bsky.embed.images',
       images: blobs
     }
-  } as const;
+  };
 
   try {
     const res = await agent.com.atproto.repo.createRecord({

@@ -9,10 +9,21 @@
     "skipLibCheck": true,
     "strict": true,
     "outDir": "dist",
+    "noEmit": true,
     "allowImportingTsExtensions": true,
-    "types": ["node"],
-    "lib": ["ES2022"]
+    "types": [
+      "node"
+    ],
+    "lib": [
+      "ES2022"
+    ]
   },
-  "include": ["src", "scripts"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "src",
+    "scripts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
 }

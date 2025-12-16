@@ -281,24 +281,59 @@ jobs:
           git commit -m "chore: update autoposter state"
           git pull --rebase
           git push
-```
 
 ## Secrets (GitHub Actions)
 
-- `BSKY_HANDLE`
-- `BSKY_APP_PASSWORD`
-- `OPENAI_API_KEY`
-- Optional: `DRY_RUN=true`
+**Required:**
+- `BSKY_HANDLE` — Your Bluesky handle (e.g., `yourname.bsky.social`)
+- `BSKY_APP_PASSWORD` — App password from Bluesky settings
+- `OPENAI_API_KEY` — OpenAI API key for post generation
 
-## MVP milestones (ship in order)
+**Optional:**
+- `TG_BOT_TOKEN` — Telegram bot token for notifications (from @BotFather)
+- `TG_CHAT_ID` — Telegram chat ID to receive notifications
+- `DRY_RUN=true` (as a repository variable) — Test without posting
 
-1. Local dry-run: parse CSV, pick images, generate + validate JSON, print “would post”
-2. Real Bluesky post: text-only, idempotent `rkey`
-3. Images end-to-end: upload blobs, embed images, alt text
-4. GitHub Actions: cron + concurrency + state commits
+## Development
 
-## Optional upgrades (still hostless)
+```bash
+# Install dependencies
+npm install
 
-- Add link facets via `@atproto/api` `RichText` so URLs render cleanly.
-- Add a `content/blocked_phrases.txt` simple safety filter.
-- Add `--force-id 001` CLI flag for manual retries/testing.
+# Run tests
+npm run test
+
+# Type check
+npm run lint
+
+# Dry run
+DRY_RUN=true BSKY_HANDLE=x BSKY_APP_PASSWORD=x OPENAI_API_KEY=your-key npm run autopost
+```
+
+## Features
+
+### ✅ Implemented
+
+- **Rich text links** — URLs render as clickable links via `RichText` facets
+- **Safety filter** — Blocked phrase checking via `content/blocked_phrases.txt`
+- **Telegram notifications** — Optional alerts on post success/failure
+- **Idempotent posting** — Deterministic `rkey` prevents double-posting
+- **AI with fallback** — OpenAI generation with auto-repair and fallback templates
+- **Image handling** — Auto-selection based on tags, recency tracking
+- **Comprehensive tests** — 59+ tests covering all core modules
+
+### 🖼️ Adding Images
+
+1. Add your images to `assets/images/originals/`
+2. Run `npm run preprocess-images`
+3. Update `assets/images/manifest.json` with tags and alt text
+4. Commit `assets/images/processed/` and `manifest.json`
+
+### 📝 Adding Content
+
+Edit `content/queue.csv` with your topics:
+
+```csv
+id,topic,link,tags,cta,active,image_ids
+011,"Your topic here","https://link.com","tag1;tag2","Call to action",true,
+```

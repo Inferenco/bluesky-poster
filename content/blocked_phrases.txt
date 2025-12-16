@@ -1,0 +1,14 @@
+# Blocked Phrases
+# Lines starting with # are comments
+# One phrase per line (case-insensitive matching)
+
+# Example offensive terms (add your own)
+# slur-example
+# offensive-term
+
+# Competitor mentions (optional)
+# competitor-name
+
+# Legal/compliance phrases
+# not financial advice
+# guaranteed returns
