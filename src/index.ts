@@ -109,6 +109,8 @@ async function main() {
     graphemes: countGraphemes(generation.text),
     images: images.map((i) => i.id),
     model: generation.model,
+    total_tokens: generation.meta?.total_tokens,
+    file_search: generation.meta?.file_search,
     dryRun
   });
 
@@ -199,4 +201,3 @@ main().catch(async (err) => {
   });
   process.exitCode = 1;
 });
-

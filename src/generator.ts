@@ -1,5 +1,3 @@
-import OpenAI from 'openai';
-import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { ImageAsset } from './images.js';
 import { QueueItem } from './queue.js';
 import { MAX_GRAPHEMES, countGraphemes, validateAltOverrides } from './validate.js';
@@ -8,7 +6,14 @@ export interface GenerationResult {
   text: string;
   alt_overrides?: string[];
   model: string;
-  source: 'openai' | 'fallback';
+  source: 'nova' | 'fallback';
+  meta?: {
+    total_tokens?: number;
+    file_search?: number;
+    web_search?: number;
+    image_generation?: number;
+    code_interpreter?: number;
+  };
 }
 
 export interface GenerationInput {
@@ -17,43 +22,57 @@ export interface GenerationInput {
   images: ImageAsset[];
 }
 
-const DEFAULT_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const DEFAULT_MODEL = process.env.NOVA_MODEL || 'gpt-5-mini';
+const DEFAULT_VERBOSITY = normalizeVerbosity(process.env.NOVA_VERBOSITY);
+const DEFAULT_MAX_TOKENS = parseMaxTokens(process.env.NOVA_MAX_TOKENS);
+const DEFAULT_REASONING = parseBoolean(process.env.NOVA_REASONING);
+const NOVA_BASE_URL = process.env.NOVA_BASE_URL || 'https://gateway.inferenco.com';
+
+interface NovaResponse {
+  text: string;
+  model?: string;
+  total_tokens?: number;
+  web_search?: number;
+  file_search?: number;
+  image_generation?: number;
+  code_interpreter?: number;
+}
 
 export async function generatePost(input: GenerationInput): Promise<GenerationResult> {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.NOVA_API_KEY;
   if (!apiKey) {
-    return fallbackText(input, 'OPENAI_API_KEY missing');
+    return fallbackText(input, 'NOVA_API_KEY missing');
   }
 
-  const client = new OpenAI({ apiKey });
-  const basePayload = buildGeneratePrompt(input);
+  const basePrompt = buildGeneratePrompt(input);
 
   try {
-    const first = await client.chat.completions.create({
-      model: DEFAULT_MODEL,
-      messages: basePayload,
-      response_format: { type: 'json_object' }
-    });
-
-    const parsed = safeParse(first.choices[0]?.message?.content || '');
+    const first = await callNova(apiKey, basePrompt);
+    const parsed = safeParse(first.text);
     const initial = parsed || null;
     const validated = validateOutput(initial, input.images.length);
 
     if (validated.ok) {
-      return { ...validated.output!, model: first.model, source: 'openai' };
+      return {
+        ...validated.output!,
+        model: first.model || DEFAULT_MODEL,
+        source: 'nova',
+        meta: extractMeta(first)
+      };
     }
 
     // Attempt repair
-    const repair = await client.chat.completions.create({
-      model: DEFAULT_MODEL,
-      messages: buildRepairPrompt(input.images.length, initial, validated.message),
-      response_format: { type: 'json_object' }
-    });
-
-    const repaired = safeParse(repair.choices[0]?.message?.content || '');
+    const repairPrompt = buildRepairPrompt(input.images.length, initial, validated.message);
+    const repair = await callNova(apiKey, repairPrompt);
+    const repaired = safeParse(repair.text);
     const repairedValid = validateOutput(repaired, input.images.length);
     if (repairedValid.ok) {
-      return { ...repairedValid.output!, model: repair.model, source: 'openai' };
+      return {
+        ...repairedValid.output!,
+        model: repair.model || DEFAULT_MODEL,
+        source: 'nova',
+        meta: extractMeta(repair)
+      };
     }
 
     return fallbackText(input, repairedValid.message || 'repair failed');
@@ -62,28 +81,25 @@ export async function generatePost(input: GenerationInput): Promise<GenerationRe
   }
 }
 
-function buildGeneratePrompt(input: GenerationInput): ChatCompletionMessageParam[] {
+function buildGeneratePrompt(input: GenerationInput): string {
   const imageContext = input.images
     .map((img, idx) => `Image ${idx + 1}: id=${img.id}, alt="${img.defaultAlt}"`)
     .join('\n');
 
-  const system = 'You write concise Bluesky posts. Follow the provided voice rules. Output JSON only (no markdown, no extra keys).';
-  const user = `Voice rules (authoritative):\n${input.voice}\n\nTask:\nWrite a Bluesky post (max 300 graphemes, target <= 260) about:\n- topic: ${input.item.topic}\n- link (optional): ${input.item.link || ''}\n- call to action (optional): ${input.item.cta || ''}\n- tags: ${input.item.tags.join(', ')}\n\nImages (for grounding; do not invent details):\n${imageContext}\n\nOutput JSON with:\n- text: string\n- alt_overrides: optional array of strings (only include if you are confidently improving the provided alts; never add new visual facts)`;
+  const instructions = [
+    'You write concise Bluesky posts.',
+    'Follow the provided voice rules.',
+    'Use uploaded docs as the primary source when relevant.',
+    'Keep facts grounded; do not invent details.',
+    'Make the framing fresh and non-repetitive each time.',
+    'Output JSON only (no markdown, no extra keys).'
+  ].join(' ');
 
-  return [
-    { role: 'system', content: system },
-    { role: 'user', content: user }
-  ];
+  return `${instructions}\n\nVoice rules (authoritative):\n${input.voice}\n\nTask:\nWrite a Bluesky post (max 300 graphemes, target <= 260) about:\n- topic: ${input.item.topic}\n- link (optional): ${input.item.link || ''}\n- call to action (optional): ${input.item.cta || ''}\n- tags: ${input.item.tags.join(', ')}\n\nImages (for grounding; do not invent details):\n${imageContext}\n\nOutput JSON with:\n- text: string\n- alt_overrides: optional array of strings (only include if you are confidently improving the provided alts; never add new visual facts)`;
 }
 
-function buildRepairPrompt(imageCount: number, original: any, validationError: string | undefined): ChatCompletionMessageParam[] {
-  const system = 'You fix JSON outputs. Output JSON only (no markdown, no extra keys).';
-  const user = `Fix the following output to satisfy constraints:\n- valid JSON\n- text <= 300 graphemes\n- if alt_overrides is present, it must have exactly ${imageCount} strings\n\nOriginal output:\n${JSON.stringify(original)}\n\nConstraint failures:\n${validationError || 'invalid JSON'}`;
-
-  return [
-    { role: 'system', content: system },
-    { role: 'user', content: user }
-  ];
+function buildRepairPrompt(imageCount: number, original: any, validationError: string | undefined): string {
+  return `You fix JSON outputs. Output JSON only (no markdown, no extra keys).\n\nFix the following output to satisfy constraints:\n- valid JSON\n- text <= 300 graphemes\n- if alt_overrides is present, it must have exactly ${imageCount} strings\n\nOriginal output:\n${JSON.stringify(original)}\n\nConstraint failures:\n${validationError || 'invalid JSON'}`;
 }
 
 function validateOutput(obj: any, imageCount: number): { ok: boolean; message?: string; output?: GenerationResult } {
@@ -100,7 +116,7 @@ function validateOutput(obj: any, imageCount: number): { ok: boolean; message?: 
 
   return {
     ok: true,
-    output: { text: obj.text, alt_overrides: obj.alt_overrides, model: '', source: 'openai' }
+    output: { text: obj.text, alt_overrides: obj.alt_overrides, model: '', source: 'nova' }
   };
 }
 
@@ -122,4 +138,58 @@ function trimToMaxGraphemes(text: string, max: number): string {
   const segments = Array.from(new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(text));
   if (segments.length <= max) return text;
   return segments.slice(0, max).map((s) => s.segment).join('');
+}
+
+async function callNova(apiKey: string, prompt: string): Promise<NovaResponse> {
+  const response = await fetch(`${NOVA_BASE_URL}/ai`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      input: prompt,
+      model: DEFAULT_MODEL,
+      verbosity: DEFAULT_VERBOSITY,
+      max_tokens: DEFAULT_MAX_TOKENS,
+      reasoning: DEFAULT_REASONING
+    })
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Nova API error ${response.status}: ${body}`);
+  }
+
+  const data = (await response.json()) as NovaResponse;
+  if (!data || typeof data.text !== 'string') {
+    throw new Error('Nova response missing text');
+  }
+  return data;
+}
+
+function parseBoolean(value: string | undefined): boolean {
+  return String(value || '').toLowerCase() === 'true';
+}
+
+function normalizeVerbosity(value: string | undefined): 'Low' | 'Medium' | 'High' {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized === 'low') return 'Low';
+  if (normalized === 'high') return 'High';
+  return 'Medium';
+}
+
+function parseMaxTokens(value: string | undefined): number {
+  const parsed = Number.parseInt(String(value || ''), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 400;
+}
+
+function extractMeta(response: NovaResponse): GenerationResult['meta'] {
+  return {
+    total_tokens: typeof response.total_tokens === 'number' ? response.total_tokens : undefined,
+    file_search: typeof response.file_search === 'number' ? response.file_search : undefined,
+    web_search: typeof response.web_search === 'number' ? response.web_search : undefined,
+    image_generation: typeof response.image_generation === 'number' ? response.image_generation : undefined,
+    code_interpreter: typeof response.code_interpreter === 'number' ? response.code_interpreter : undefined
+  };
 }

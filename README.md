@@ -6,7 +6,7 @@ A small Node.js + TypeScript autoposter that runs on **GitHub Actions cron** (no
 - a static, local **image pool** (`assets/images/processed/*` + `assets/images/manifest.json`)
 - a committed **state file** (`state/state.json`) so it never repeats
 
-It generates post copy with a lightweight OpenAI model, uploads 1–4 images as blobs, and posts an `app.bsky.embed.images` embed.
+It generates post copy with Nova Gateway (GPT-5-mini by default), uploads 1–4 images as blobs, and posts an `app.bsky.embed.images` embed.
 
 ## Hard constraints (enforced in code)
 
@@ -18,7 +18,7 @@ It generates post copy with a lightweight OpenAI model, uploads 1–4 images as 
 
 1. **Idempotent posting:** create the Bluesky record with a deterministic `rkey` derived from `queue.csv:id` (so workflow retries can’t double-post the same queue item).
 2. **Concurrency-safe Actions:** use workflow `concurrency` to prevent overlapping runs.
-3. **Fallback copy:** if OpenAI fails or output is invalid, post a deterministic template (or exit cleanly in `DRY_RUN`).
+3. **Fallback copy:** if Nova fails or output is invalid, post a deterministic template (or exit cleanly in `DRY_RUN`).
 4. **State stays small:** trim “recent” arrays to a fixed size; keep `posted_ids` as the canonical “never repeat” list.
 
 ## Repo layout
@@ -42,7 +42,7 @@ It generates post copy with a lightweight OpenAI model, uploads 1–4 images as 
 /src
   index.ts          # CLI entry
   bluesky.ts        # login + upload + createRecord
-  generator.ts      # OpenAI JSON generation + repair
+  generator.ts      # Nova JSON generation + repair
   images.ts         # image selection + manifest loading
   queue.ts          # CSV parsing + selection
   state.ts          # load/save + trimming
@@ -50,6 +50,7 @@ It generates post copy with a lightweight OpenAI model, uploads 1–4 images as 
 
 /scripts
   preprocess-images.ts
+  upload-docs.ts
 ```
 
 ## Data files (schemas)
@@ -138,7 +139,7 @@ Commit `processed/` + `manifest.json`. Keep `originals/` gitignored if you want.
    - prefer images not in `state.recent_image_ids`
    - pick `N = min(default_images_per_post, max_images_per_post)` (at least 1 if available)
 
-## Post generation (OpenAI) with strict output
+## Post generation (Nova) with strict output
 
 Inputs:
 
@@ -161,7 +162,7 @@ Required model output (strict JSON):
 
 System:
 
-> You write concise Bluesky posts. Follow the provided voice rules. Output JSON only (no markdown, no extra keys).
+> You write concise Bluesky posts. Follow the provided voice rules. Use uploaded docs as primary source when relevant. Output JSON only (no markdown, no extra keys). Keep the framing fresh.
 
 User (template):
 
@@ -270,7 +271,12 @@ jobs:
         env:
           BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
           BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          NOVA_API_KEY: ${{ secrets.NOVA_API_KEY }}
+          NOVA_MODEL: ${{ vars.NOVA_MODEL }}
+          NOVA_VERBOSITY: ${{ vars.NOVA_VERBOSITY }}
+          NOVA_MAX_TOKENS: ${{ vars.NOVA_MAX_TOKENS }}
+          NOVA_REASONING: ${{ vars.NOVA_REASONING }}
+          NOVA_BASE_URL: ${{ vars.NOVA_BASE_URL }}
           DRY_RUN: ${{ vars.DRY_RUN }}
       - name: Commit state
         run: |
@@ -287,9 +293,14 @@ jobs:
 **Required:**
 - `BSKY_HANDLE` — Your Bluesky handle (e.g., `yourname.bsky.social`)
 - `BSKY_APP_PASSWORD` — App password from Bluesky settings
-- `OPENAI_API_KEY` — OpenAI API key for post generation
+- `NOVA_API_KEY` — Nova Gateway API key for post generation
 
 **Optional:**
+- `NOVA_MODEL` — Model name (default `gpt-5-mini`)
+- `NOVA_VERBOSITY` — `Low` | `Medium` | `High` (default `Medium`)
+- `NOVA_MAX_TOKENS` — Max response tokens (default `400`)
+- `NOVA_REASONING` — `true` | `false` (default `false`)
+- `NOVA_BASE_URL` — Override base URL (default `https://gateway.inferenco.com`)
 - `TG_BOT_TOKEN` — Telegram bot token for notifications (from @BotFather)
 - `TG_CHAT_ID` — Telegram chat ID to receive notifications
 - `DRY_RUN=true` (as a repository variable) — Test without posting
@@ -307,8 +318,23 @@ npm run test
 npm run lint
 
 # Dry run
-DRY_RUN=true BSKY_HANDLE=x BSKY_APP_PASSWORD=x OPENAI_API_KEY=your-key npm run autopost
+DRY_RUN=true BSKY_HANDLE=x BSKY_APP_PASSWORD=x NOVA_API_KEY=your-key npm run autopost
 ```
+
+## Knowledge Base Docs
+
+Upload your docs to Nova so the generator can ground posts in your materials:
+
+```bash
+# Dry run (no upload)
+NOVA_API_KEY=your-key npm run upload-docs -- --dry-run
+
+# Upload from ./docs
+NOVA_API_KEY=your-key npm run upload-docs
+```
+
+By default the script reads from `docs/`; override with `--dir path/to/docs`.
+Set `NOVA_BASE_URL` or pass `--base-url` to target a different gateway.
 
 ## Features
 
@@ -318,7 +344,7 @@ DRY_RUN=true BSKY_HANDLE=x BSKY_APP_PASSWORD=x OPENAI_API_KEY=your-key npm run a
 - **Safety filter** — Blocked phrase checking via `content/blocked_phrases.txt`
 - **Telegram notifications** — Optional alerts on post success/failure
 - **Idempotent posting** — Deterministic `rkey` prevents double-posting
-- **AI with fallback** — OpenAI generation with auto-repair and fallback templates
+- **AI with fallback** — Nova generation with auto-repair and fallback templates
 - **Image handling** — Auto-selection based on tags, recency tracking
 - **Comprehensive tests** — 59+ tests covering all core modules
 
