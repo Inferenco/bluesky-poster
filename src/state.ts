@@ -71,3 +71,8 @@ export function recordSuccess(state: BotState, schedule: ScheduleConfig, payload
   }
   return updated;
 }
+
+export async function loadSchedule(root: string): Promise<ScheduleConfig> {
+  const raw = await fs.readFile(path.join(root, 'config', 'schedule.json'), 'utf8');
+  return JSON.parse(raw) as ScheduleConfig;
+}

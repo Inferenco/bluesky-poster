@@ -1,15 +1,11 @@
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { loadQueue, selectNext } from './queue.js';
-import { loadManifest, selectImages } from './images.js';
+import { getAvailableImages, selectRandomImage } from './images.js';
 import { generatePost } from './generator.js';
-import { MAX_GRAPHEMES, countGraphemes, hashText } from './validate.js';
+import { countGraphemes, hashText } from './validate.js';
 import { BlueskyAuth, login, postWithImages } from './bluesky.js';
-import { BotState, ScheduleConfig, ensureToday, loadState, recordSuccess, saveState } from './state.js';
-import { checkSafety } from './safety.js';
-import { sendTelegramNotification } from './notify.js';
+import { BotState, ScheduleConfig, ensureToday, loadState, recordSuccess, saveState, loadSchedule } from './state.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,62 +29,43 @@ async function main() {
     return;
   }
 
-  const queue = await loadQueue(ROOT);
-  const selection = selectNext(queue, state.posted_ids);
-  if (!selection) {
-    console.log('No active queue items to post');
+  // 1. Get available images and select one randomly
+  const images = await getAvailableImages(ROOT);
+  const image = selectRandomImage(images);
+
+  if (!image) {
+    console.log('No eligible images found in originals folder');
     return;
   }
 
-  const { item: next, isRecycled } = selection;
-  if (isRecycled) {
-    console.log(`Recycling topic "${next.id}" for fresh content generation`);
-  }
+  console.log(`Selected image: ${image.id}`);
 
-  const manifest = await loadManifest(ROOT);
-  const images = selectImages(manifest, {
-    requestedIds: next.imageIds,
-    tags: next.tags,
-    defaultImagesPerPost: schedule.default_images_per_post,
-    maxImagesPerPost: schedule.max_images_per_post,
-    recentImageIds: state.recent_image_ids
-  });
+  // 2. Generate post using Nova API
+  const generation = await generatePost({ image });
 
-  if (images.length === 0) {
-    console.log('No eligible images found (<1MB)');
-    return;
-  }
-  await verifyImageSizes(images);
+  // 3. Build post text with hashtags
+  const hashtagText = generation.hashtags.map(h => `#${h}`).join(' ');
+  const fullText = hashtagText ? `${generation.text}\n\n${hashtagText}` : generation.text;
 
-  const voice = await fs.readFile(path.join(ROOT, 'config', 'voice.md'), 'utf8');
-  const generation = await generatePost({ voice, item: next, images });
+  const textHash = hashText(fullText);
+  const postId = buildPostId(textHash);
 
-  // Safety check
-  const safetyResult = await checkSafety(ROOT, generation.text);
-  if (!safetyResult.safe) {
-    const errorMsg = `Generated text contains blocked phrase: "${safetyResult.blockedPhrase}"`;
-    console.error(errorMsg);
-    await sendTelegramNotification({
-      success: false,
-      postId: next.id,
-      error: errorMsg,
-      dryRun
-    });
-    return;
-  }
-
-  const textHash = hashText(generation.text);
+  // Duplicate check
   if (state.recent_text_hashes.includes(textHash)) {
     console.log('Generated text duplicates recent post; exiting to avoid repeat.');
     return;
   }
+  if (state.posted_ids.includes(postId)) {
+    console.log('Generated text matches previously posted content; exiting to avoid repeat.');
+    return;
+  }
 
-  const finalAlt = generation.alt_overrides && generation.alt_overrides.length === images.length
-    ? generation.alt_overrides
-    : images.map((img) => img.defaultAlt);
+  // Use Nova-provided alt text or fallback
+  const altText = generation.alt_text || image.defaultAlt;
 
   const auth = envAuth();
 
+  // Random jitter
   if (schedule.random_jitter_minutes > 0) {
     const jitterMs = Math.floor(Math.random() * schedule.random_jitter_minutes * 60 * 1000);
     if (jitterMs > 0) {
@@ -98,56 +75,47 @@ async function main() {
   }
 
   const payload = {
-    text: generation.text,
-    images: images.map((img, idx) => ({ asset: img, alt: finalAlt[idx] })),
-    rkey: next.id
+    text: fullText,
+    images: [{ asset: image, alt: altText }],
+    rkey: postId
   };
 
   console.log('Ready to post:', {
-    id: next.id,
-    text: generation.text,
-    graphemes: countGraphemes(generation.text),
-    images: images.map((i) => i.id),
+    id: postId,
+    text: fullText,
+    graphemes: countGraphemes(fullText),
+    image: image.id,
     model: generation.model,
+    source: generation.source,
+    total_tokens: generation.meta?.total_tokens,
+    file_search: generation.meta?.file_search,
     dryRun
   });
 
   if (dryRun) {
-    await sendTelegramNotification({
-      success: true,
-      postId: next.id,
-      postText: generation.text,
-      dryRun: true
-    });
+    console.log('Dry run complete - no post created');
     return;
   }
 
+  // 4. Publish to Bluesky
   const agent = await login(auth);
   const result = await postWithImages(agent, payload);
 
   if (result.alreadyExists) {
-    console.log(`Record with rkey ${next.id} already exists; marking as posted.`);
+    console.log(`Record with rkey ${postId} already exists; marking as posted.`);
   } else {
     console.log(`Posted: ${result.uri}`);
   }
 
   state = recordSuccess(state, schedule, {
-    id: next.id,
+    id: postId,
     textHash,
-    imageIds: images.map((i) => i.id),
+    imageIds: [image.id],
     when: now
   });
 
   await saveState(ROOT, state);
   console.log('State updated.');
-
-  // Send success notification
-  await sendTelegramNotification({
-    success: true,
-    postId: next.id,
-    postText: generation.text,
-    dryRun: false
-  });
 }
 
 function isQuietHours(range: [string, string], now: Date): boolean {
@@ -165,12 +133,6 @@ function isQuietHours(range: [string, string], now: Date): boolean {
   return minutes >= start || minutes < end;
 }
 
-async function loadSchedule(root: string): Promise<ScheduleConfig> {
-  const raw = await fs.readFile(path.join(root, 'config', 'schedule.json'), 'utf8');
-  const parsed = JSON.parse(raw) as ScheduleConfig;
-  return parsed;
-}
-
 function envAuth(): BlueskyAuth {
   const identifier = process.env.BSKY_HANDLE || process.env.BSKY_IDENTIFIER;
   const password = process.env.BSKY_APP_PASSWORD || process.env.BSKY_PASSWORD;
@@ -180,23 +142,13 @@ function envAuth(): BlueskyAuth {
   return { identifier, password };
 }
 
-async function verifyImageSizes(images: { path: string }[]): Promise<void> {
-  const maxBytes = 1_000_000;
-  for (const img of images) {
-    const filePath = path.join(process.cwd(), img.path);
-    const stat = await fs.stat(filePath);
-    if (stat.size > maxBytes) {
-      throw new Error(`Image ${img.path} is ${stat.size} bytes (>1,000,000)`);
-    }
-  }
+function buildPostId(textHash: string): string {
+  const raw = textHash.startsWith('sha256:') ? textHash.slice('sha256:'.length) : textHash;
+  const cleaned = raw.replace(/[^a-z0-9]/gi, '');
+  return cleaned || Date.now().toString(36);
 }
 
-main().catch(async (err) => {
+main().catch((err) => {
   console.error(err);
-  await sendTelegramNotification({
-    success: false,
-    error: String(err)
-  });
   process.exitCode = 1;
 });
-
