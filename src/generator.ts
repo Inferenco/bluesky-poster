@@ -151,5 +151,5 @@ async function callNova(apiKey: string, prompt: string): Promise<NovaResponse> {
 
 function parseMaxTokens(value: string | undefined): number {
   const parsed = Number.parseInt(String(value || ''), 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 400;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 600;
 }
