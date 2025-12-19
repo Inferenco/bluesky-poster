@@ -5,13 +5,13 @@
   "scripts": {
     "autopost": "tsx src/index.ts",
     "preprocess-images": "tsx scripts/preprocess-images.ts",
-    "upload-docs": "tsx scripts/upload-docs.ts",
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
     "@atproto/api": "^0.13.21",
+    "image-size": "^2.0.2",
     "sharp": "^0.33.5"
   },
   "devDependencies": {

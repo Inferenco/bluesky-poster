@@ -4,8 +4,7 @@ import type { ImageAsset } from '../images.js';
 
 const baseImage: ImageAsset = {
     id: 'img-001',
-    path: 'assets/images/processed/test.jpg',
-    tags: ['test'],
+    path: 'assets/images/originals/test.jpg',
     defaultAlt: 'A test image',
     width: 1200,
     height: 675,
@@ -14,8 +13,7 @@ const baseImage: ImageAsset = {
 };
 
 const baseInput = {
-    voice: 'Direct, concise, no hashtags.',
-    images: [baseImage]
+    image: baseImage
 };
 
 const originalEnv = { ...process.env };
@@ -56,10 +54,14 @@ describe('generatePost (Nova)', () => {
         expect(globalThis.fetch).not.toHaveBeenCalled();
     });
 
-    it('returns valid output from Nova response', async () => {
+    it('returns valid output from Nova response with hashtags', async () => {
         process.env.NOVA_API_KEY = 'test-key';
         mockFetchOnce({
-            text: JSON.stringify({ text: 'Hello world', alt_overrides: ['Alt text'] }),
+            text: JSON.stringify({
+                text: 'Hello world',
+                hashtags: ['AI', 'blockchain'],
+                alt_text: 'A descriptive alt'
+            }),
             model: 'gpt-5-mini',
             total_tokens: 123,
             file_search: 1
@@ -68,26 +70,45 @@ describe('generatePost (Nova)', () => {
         const result = await generatePost(baseInput);
         expect(result.source).toBe('nova');
         expect(result.text).toBe('Hello world');
-        expect(result.alt_overrides).toEqual(['Alt text']);
+        expect(result.hashtags).toEqual(['AI', 'blockchain']);
+        expect(result.alt_text).toBe('A descriptive alt');
         expect(result.model).toBe('gpt-5-mini');
         expect(result.meta?.total_tokens).toBe(123);
         expect(result.meta?.file_search).toBe(1);
         expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     });
 
-    it('repairs invalid JSON output', async () => {
+    it('falls back on invalid JSON', async () => {
         process.env.NOVA_API_KEY = 'test-key';
         mockFetchOnce({
-            text: 'not-json',
-            model: 'gpt-5-mini'
-        });
-        mockFetchOnce({
-            text: JSON.stringify({ text: 'Repaired copy', alt_overrides: ['Alt text'] }),
+            text: 'not-json-at-all',
             model: 'gpt-5-mini'
         });
 
         const result = await generatePost(baseInput);
-        expect(result.text).toBe('Repaired copy');
-        expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+        expect(result.source).toBe('fallback');
+        expect(result.hashtags).toBeDefined();
+        expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('extracts JSON from wrapped response', async () => {
+        process.env.NOVA_API_KEY = 'test-key';
+        mockFetchOnce({
+            text: 'Here is the JSON: {"text": "Extracted", "hashtags": ["test"]}',
+            model: 'gpt-5-mini'
+        });
+
+        const result = await generatePost(baseInput);
+        expect(result.source).toBe('nova');
+        expect(result.text).toBe('Extracted');
+        expect(result.hashtags).toEqual(['test']);
+    });
+
+    it('falls back when API returns error', async () => {
+        process.env.NOVA_API_KEY = 'test-key';
+        mockFetchOnce({ error: 'Server error' }, false, 500);
+
+        const result = await generatePost(baseInput);
+        expect(result.source).toBe('fallback');
     });
 });

@@ -1,149 +1,70 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { selectImages, type ImageAsset, type Manifest } from '../images.js';
+import { describe, it, expect, vi, beforeEach, afterEach, MockedFunction } from 'vitest';
+import { selectRandomImage, type ImageAsset } from '../images.js';
 
-const createImage = (overrides: Partial<ImageAsset> = {}): ImageAsset => ({
-    id: 'img-001',
-    path: 'assets/images/processed/img-001.jpg',
-    tags: ['product', 'demo'],
-    defaultAlt: 'A demo image',
+const createImage = (id: string): ImageAsset => ({
+    id,
+    path: `assets/images/originals/${id}.jpg`,
+    defaultAlt: 'Test image',
     width: 1200,
     height: 675,
     bytes: 100000,
-    mime: 'image/jpeg',
-    ...overrides
+    mime: 'image/jpeg'
 });
 
-describe('selectImages', () => {
-    describe('with requested IDs', () => {
-        it('returns images matching requested IDs', () => {
-            const manifest: Manifest = {
-                images: [
-                    createImage({ id: 'img-001' }),
-                    createImage({ id: 'img-002' }),
-                    createImage({ id: 'img-003' })
-                ]
-            };
-
-            const result = selectImages(manifest, {
-                requestedIds: ['img-002', 'img-003'],
-                tags: [],
-                defaultImagesPerPost: 1,
-                maxImagesPerPost: 4,
-                recentImageIds: []
-            });
-
-            expect(result).toHaveLength(2);
-            expect(result.map(i => i.id)).toEqual(['img-002', 'img-003']);
-        });
-
-        it('filters out missing requested IDs', () => {
-            const manifest: Manifest = {
-                images: [createImage({ id: 'img-001' })]
-            };
-
-            const result = selectImages(manifest, {
-                requestedIds: ['img-001', 'missing'],
-                tags: [],
-                defaultImagesPerPost: 1,
-                maxImagesPerPost: 4,
-                recentImageIds: []
-            });
-
-            expect(result).toHaveLength(1);
-            expect(result[0].id).toBe('img-001');
-        });
-
-        it('limits to 4 images max', () => {
-            const manifest: Manifest = {
-                images: Array.from({ length: 6 }, (_, i) => createImage({ id: `img-00${i}` }))
-            };
-
-            const result = selectImages(manifest, {
-                requestedIds: ['img-000', 'img-001', 'img-002', 'img-003', 'img-004', 'img-005'],
-                tags: [],
-                defaultImagesPerPost: 1,
-                maxImagesPerPost: 4,
-                recentImageIds: []
-            });
-
-            expect(result).toHaveLength(4);
-        });
+describe('selectRandomImage', () => {
+    it('returns null for empty array', () => {
+        const result = selectRandomImage([]);
+        expect(result).toBeNull();
     });
 
-    describe('automatic selection', () => {
-        it('filters out images over 1MB', () => {
-            const manifest: Manifest = {
-                images: [
-                    createImage({ id: 'small', bytes: 500000 }),
-                    createImage({ id: 'large', bytes: 1500000 })
-                ]
-            };
+    it('returns the only image when array has one item', () => {
+        const image = createImage('only');
+        const result = selectRandomImage([image]);
+        expect(result).toBe(image);
+    });
 
-            const result = selectImages(manifest, {
-                tags: [],
-                defaultImagesPerPost: 2,
-                maxImagesPerPost: 4,
-                recentImageIds: []
-            });
+    it('returns an image from the array', () => {
+        const images = [
+            createImage('img-001'),
+            createImage('img-002'),
+            createImage('img-003')
+        ];
 
-            expect(result).toHaveLength(1);
-            expect(result[0].id).toBe('small');
-        });
+        const result = selectRandomImage(images);
+        expect(result).not.toBeNull();
+        expect(images).toContain(result);
+    });
 
-        it('prefers images with tag overlap', () => {
-            const manifest: Manifest = {
-                images: [
-                    createImage({ id: 'no-match', tags: ['unrelated'] }),
-                    createImage({ id: 'match', tags: ['product', 'wallet'] })
-                ]
-            };
+    it('provides random distribution over multiple calls', () => {
+        const images = [
+            createImage('a'),
+            createImage('b'),
+            createImage('c')
+        ];
 
-            const result = selectImages(manifest, {
-                tags: ['product', 'wallet'],
-                defaultImagesPerPost: 1,
-                maxImagesPerPost: 4,
-                recentImageIds: []
-            });
+        const counts = new Map<string, number>();
+        for (let i = 0; i < 100; i++) {
+            const result = selectRandomImage(images)!;
+            counts.set(result.id, (counts.get(result.id) || 0) + 1);
+        }
 
-            expect(result[0].id).toBe('match');
-        });
+        // All images should be selected at least once in 100 tries
+        expect(counts.size).toBe(3);
+        for (const [_, count] of counts) {
+            expect(count).toBeGreaterThan(0);
+        }
+    });
+});
 
-        it('deprioritizes recently used images', () => {
-            const manifest: Manifest = {
-                images: [
-                    createImage({ id: 'recent', tags: ['product'] }),
-                    createImage({ id: 'fresh', tags: ['product'] })
-                ]
-            };
-
-            // Run multiple times to account for random tiebreaker
-            const results = Array.from({ length: 10 }, () =>
-                selectImages(manifest, {
-                    tags: ['product'],
-                    defaultImagesPerPost: 1,
-                    maxImagesPerPost: 4,
-                    recentImageIds: ['recent']
-                })
-            );
-
-            // Fresh should be selected more often
-            const freshCount = results.filter(r => r[0].id === 'fresh').length;
-            expect(freshCount).toBeGreaterThan(5);
-        });
-
-        it('respects defaultImagesPerPost', () => {
-            const manifest: Manifest = {
-                images: Array.from({ length: 5 }, (_, i) => createImage({ id: `img-${i}` }))
-            };
-
-            const result = selectImages(manifest, {
-                tags: [],
-                defaultImagesPerPost: 2,
-                maxImagesPerPost: 4,
-                recentImageIds: []
-            });
-
-            expect(result).toHaveLength(2);
-        });
+describe('ImageAsset interface', () => {
+    it('has required properties', () => {
+        const image = createImage('test');
+        expect(image.id).toBe('test');
+        expect(image.path).toBe('assets/images/originals/test.jpg');
+        expect(image.defaultAlt).toBe('Test image');
+        expect(image.width).toBe(1200);
+        expect(image.height).toBe(675);
+        expect(image.bytes).toBe(100000);
+        expect(image.mime).toBe('image/jpeg');
     });
 });

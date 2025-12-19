@@ -1,10 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { imageSize } from 'image-size';
 
 export interface ImageAsset {
   id: string;
   path: string;
-  tags: string[];
   defaultAlt: string;
   width: number;
   height: number;
@@ -12,50 +12,79 @@ export interface ImageAsset {
   mime: string;
 }
 
-export interface Manifest {
-  images: ImageAsset[];
-}
+const ORIGINALS_DIR = 'assets/images/originals';
+const MAX_BYTES = 1_000_000;
 
-export async function loadManifest(root: string): Promise<Manifest> {
-  const manifestPath = path.join(root, 'assets', 'images', 'manifest.json');
-  const raw = await fs.readFile(manifestPath, 'utf8');
-  const json = JSON.parse(raw) as Manifest;
-  json.images = json.images || [];
-  return json;
-}
+/**
+ * Get list of all images in the originals folder
+ */
+export async function getAvailableImages(root: string): Promise<ImageAsset[]> {
+  const originalsPath = path.join(root, ORIGINALS_DIR);
 
-export interface ImageSelectionParams {
-  requestedIds?: string[];
-  tags: string[];
-  defaultImagesPerPost: number;
-  maxImagesPerPost: number;
-  recentImageIds: string[];
-}
+  try {
+    const files = await fs.readdir(originalsPath);
+    const images: ImageAsset[] = [];
 
-export function selectImages(manifest: Manifest, params: ImageSelectionParams): ImageAsset[] {
-  const maxBytes = 1_000_000;
-  const eligible = manifest.images.filter((img) => img.bytes <= maxBytes);
-  const recentSet = new Set(params.recentImageIds);
+    for (const file of files) {
+      const ext = path.extname(file).toLowerCase();
+      if (!['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(ext)) {
+        continue;
+      }
 
-  if (params.requestedIds && params.requestedIds.length > 0) {
-    return params.requestedIds
-      .map((id) => eligible.find((img) => img.id === id))
-      .filter((img): img is ImageAsset => Boolean(img))
-      .slice(0, 4);
+      const filePath = path.join(originalsPath, file);
+      const stat = await fs.stat(filePath);
+
+      // Skip files over 1MB
+      if (stat.size > MAX_BYTES) {
+        continue;
+      }
+
+      // Get dimensions
+      const buffer = await fs.readFile(filePath);
+      const dimensions = imageSize(buffer);
+
+      const mime = getMimeType(ext);
+      const id = path.basename(file, ext);
+
+      images.push({
+        id,
+        path: path.join(ORIGINALS_DIR, file),
+        defaultAlt: 'Inferenco promotional image',
+        width: dimensions.width || 800,
+        height: dimensions.height || 600,
+        bytes: stat.size,
+        mime
+      });
+    }
+
+    return images;
+  } catch (err) {
+    console.warn(`Could not read originals directory: ${err}`);
+    return [];
   }
-
-  const scored = eligible.map((img) => ({
-    img,
-    score: overlap(img.tags, params.tags) - (recentSet.has(img.id) ? 0.5 : 0) + Math.random() * 0.01
-  }));
-
-  scored.sort((a, b) => b.score - a.score);
-
-  const count = Math.max(1, Math.min(params.defaultImagesPerPost, params.maxImagesPerPost));
-  return scored.slice(0, count).map((s) => s.img);
 }
 
-function overlap(a: string[], b: string[]): number {
-  const set = new Set(a.map((t) => t.toLowerCase()));
-  return b.reduce((acc, tag) => acc + (set.has(tag.toLowerCase()) ? 1 : 0), 0);
+/**
+ * Randomly select one image from available images
+ */
+export function selectRandomImage(images: ImageAsset[]): ImageAsset | null {
+  if (images.length === 0) return null;
+  const index = Math.floor(Math.random() * images.length);
+  return images[index];
+}
+
+function getMimeType(ext: string): string {
+  switch (ext) {
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.png':
+      return 'image/png';
+    case '.webp':
+      return 'image/webp';
+    case '.gif':
+      return 'image/gif';
+    default:
+      return 'image/jpeg';
+  }
 }
