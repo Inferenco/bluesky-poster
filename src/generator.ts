@@ -62,6 +62,7 @@ Rules:
 
   try {
     const response = await callNova(apiKey, prompt);
+    console.log('Nova raw response:', response.text);
     const parsed = safeParse(response.text);
 
     if (parsed && isValidOutput(parsed)) {
@@ -83,6 +84,7 @@ Rules:
       };
     }
 
+    console.log('Parsed result:', parsed);
     return fallbackResult('Invalid JSON response from Nova');
   } catch (err) {
     return fallbackResult(String(err));
@@ -131,9 +133,10 @@ async function callNova(apiKey: string, prompt: string): Promise<NovaResponse> {
     body: JSON.stringify({
       input: prompt,
       model: DEFAULT_MODEL,
-      verbosity: 'Medium',
+      verbosity: 'low',
       max_tokens: DEFAULT_MAX_TOKENS,
-      reasoning: false
+      reasoning: false,
+      image_urls: []
     })
   });
 
@@ -143,6 +146,7 @@ async function callNova(apiKey: string, prompt: string): Promise<NovaResponse> {
   }
 
   const data = (await response.json()) as NovaResponse;
+  console.log('Full Nova response:', JSON.stringify(data, null, 2));
   if (!data || typeof data.text !== 'string') {
     throw new Error('Nova response missing text');
   }

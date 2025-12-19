@@ -4,96 +4,68 @@ import sharp from 'sharp';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const originalsDir = path.join(ROOT, 'assets', 'images', 'originals');
-const processedDir = path.join(ROOT, 'assets', 'images', 'processed');
-const manifestPath = path.join(ROOT, 'assets', 'images', 'manifest.json');
 
-const MAX_BYTES = 1_000_000;
-const QUALITIES = [82, 75, 68];
-
-interface Manifest {
-  images: Array<{
-    id: string;
-    path: string;
-    tags: string[];
-    defaultAlt: string;
-    width: number;
-    height: number;
-    bytes: number;
-    mime: string;
-  }>;
-}
+const MAX_BYTES = 950_000; // Under 1MB with some margin
+const QUALITIES = [85, 75, 65, 55];
 
 async function main() {
-  await fs.mkdir(processedDir, { recursive: true });
-
   const files = await fs.readdir(originalsDir).catch(() => []);
   if (files.length === 0) {
-    console.log('No originals found. Add images to assets/images/originals first.');
+    console.log('No images found in assets/images/originals/');
     return;
   }
 
-  const manifest = await loadManifest();
   for (const file of files) {
     const inputPath = path.join(originalsDir, file);
     if (!file.match(/\.(png|jpg|jpeg|webp)$/i)) {
-      console.log(`Skipping unsupported file: ${file}`);
+      console.log(`Skipping: ${file}`);
       continue;
     }
+
+    const stat = await fs.stat(inputPath);
+    if (stat.size <= MAX_BYTES) {
+      console.log(`Already OK: ${file} (${Math.round(stat.size / 1024)}KB)`);
+      continue;
+    }
+
+    // Compress to JPEG
     const id = path.parse(file).name;
-    const outputPath = path.join(processedDir, `${id}.jpg`);
-    const { width, height, size } = await processImage(inputPath, outputPath);
+    const outputPath = path.join(originalsDir, `${id}.jpg`);
+    const result = await compressImage(inputPath, outputPath);
 
-    const entry = {
-      id,
-      path: path.relative(ROOT, outputPath).replace(/\\/g, '/'),
-      tags: [],
-      defaultAlt: `${id} image`,
-      width,
-      height,
-      bytes: size,
-      mime: 'image/jpeg'
-    };
-
-    const existingIdx = manifest.images.findIndex((img) => img.id === id);
-    if (existingIdx >= 0) {
-      manifest.images[existingIdx] = entry;
-    } else {
-      manifest.images.push(entry);
+    // Remove original if we created a new .jpg
+    if (inputPath !== outputPath) {
+      await fs.unlink(inputPath);
     }
-    console.log(`Processed ${file} -> ${entry.path} (${size} bytes)`);
+
+    console.log(`Compressed: ${file} -> ${result.size}KB`);
   }
 
-  manifest.images.sort((a, b) => a.id.localeCompare(b.id));
-  await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
-  console.log('Manifest updated');
+  console.log('Done!');
 }
 
-async function processImage(input: string, output: string): Promise<{ width: number; height: number; size: number }> {
-  let lastInfo: sharp.OutputInfo | null = null;
+async function compressImage(input: string, output: string): Promise<{ size: number }> {
   for (const quality of QUALITIES) {
-    const pipeline = sharp(input).rotate().jpeg({ quality, mozjpeg: true });
-    const buffer = await pipeline.toBuffer({ resolveWithObject: true });
-    lastInfo = buffer.info;
-    if (buffer.data.length <= MAX_BYTES) {
-      await fs.writeFile(output, buffer.data);
-      return { width: buffer.info.width, height: buffer.info.height, size: buffer.data.length };
+    const buffer = await sharp(input)
+      .rotate()
+      .jpeg({ quality, mozjpeg: true })
+      .toBuffer();
+
+    if (buffer.length <= MAX_BYTES) {
+      await fs.writeFile(output, buffer);
+      return { size: Math.round(buffer.length / 1024) };
     }
   }
 
-  if (!lastInfo) throw new Error(`Failed to process ${input}`);
-  // Write the last attempt even if > MAX_BYTES; caller can decide.
-  const finalBuffer = await sharp(input).rotate().jpeg({ quality: QUALITIES[QUALITIES.length - 1], mozjpeg: true }).toBuffer();
-  await fs.writeFile(output, finalBuffer);
-  return { width: lastInfo.width, height: lastInfo.height, size: finalBuffer.length };
-}
+  // Last resort: resize down
+  const buffer = await sharp(input)
+    .rotate()
+    .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
+    .jpeg({ quality: 60, mozjpeg: true })
+    .toBuffer();
 
-async function loadManifest(): Promise<Manifest> {
-  try {
-    const raw = await fs.readFile(manifestPath, 'utf8');
-    return JSON.parse(raw) as Manifest;
-  } catch (err) {
-    return { images: [] };
-  }
+  await fs.writeFile(output, buffer);
+  return { size: Math.round(buffer.length / 1024) };
 }
 
 main().catch((err) => {
