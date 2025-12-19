@@ -44,25 +44,11 @@ export async function generatePost(input: GenerationInput): Promise<GenerationRe
     return fallbackResult('NOVA_API_KEY missing');
   }
 
-  const prompt = `Write a Bluesky post for Inferenco. Use your knowledge base.
-
-Output JSON only with this exact structure:
-{
-  "text": "post text here (max 280 chars)",
-  "hashtags": ["tag1", "tag2"],
-  "alt_text": "descriptive alt text for the image"
-}
-
-Rules:
-- text must be under 280 characters
-- hashtags without # prefix, 2-4 relevant tags
-- alt_text describes what the image represents
-- Be engaging and informative
-- Use your knowledge base for accurate information`;
+  const prompt = `Write a short engaging Bluesky post about Inferenco based on your knowledge. Include 2-3 hashtags. Output as JSON: {"text": "...", "hashtags": ["...", "..."]}`;
 
   try {
     const response = await callNova(apiKey, prompt);
-    console.log('Nova raw response:', response.text);
+    console.log('Full Nova response:', JSON.stringify(response, null, 2));
     const parsed = safeParse(response.text);
 
     if (parsed && isValidOutput(parsed)) {
@@ -135,7 +121,8 @@ async function callNova(apiKey: string, prompt: string): Promise<NovaResponse> {
       model: DEFAULT_MODEL,
       verbosity: 'low',
       max_tokens: DEFAULT_MAX_TOKENS,
-      reasoning: false,
+      reasoning: true,
+      effort: 'low',
       image_urls: []
     })
   });
@@ -155,5 +142,5 @@ async function callNova(apiKey: string, prompt: string): Promise<NovaResponse> {
 
 function parseMaxTokens(value: string | undefined): number {
   const parsed = Number.parseInt(String(value || ''), 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 600;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 8000;
 }

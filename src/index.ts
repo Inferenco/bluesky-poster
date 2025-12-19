@@ -12,6 +12,12 @@ const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, '..');
 
 async function main() {
+  // Master on/off switch (default: off)
+  if (String(process.env.BOT_ENABLED || 'false').toLowerCase() !== 'true') {
+    console.log('Bot is disabled (BOT_ENABLED not set to true), exiting');
+    return;
+  }
+
   const schedule = await loadSchedule(ROOT);
   const now = new Date();
   const dryRun = String(process.env.DRY_RUN || '').toLowerCase() === 'true';
