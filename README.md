@@ -32,8 +32,6 @@ Place your images in `assets/images/originals/`. Supported formats: `.jpg`, `.jp
 | `NOVA_API_KEY` | ✅ | Nova API key |
 | `BSKY_HANDLE` | ✅ | Your Bluesky handle (e.g., `user.bsky.social`) |
 | `BSKY_APP_PASSWORD` | ✅ | Bluesky app password |
-| `TG_BOT_TOKEN` | ❌ | Telegram bot token for notifications |
-| `TG_CHAT_ID` | ❌ | Telegram chat ID for notifications |
 | `DRY_RUN` | ❌ | Set to `true` to test without posting |
 
 ## Running Locally
@@ -50,10 +48,6 @@ npm install
 NOVA_API_KEY=nova_your_key_here
 BSKY_HANDLE=yourhandle.bsky.social
 BSKY_APP_PASSWORD=your-app-password
-
-# Optional: Telegram notifications
-TG_BOT_TOKEN=your_bot_token
-TG_CHAT_ID=your_chat_id
 ```
 
 ### 3. Load env and run
@@ -76,8 +70,6 @@ The bot runs automatically via GitHub Actions. Add these secrets to your reposit
 - `NOVA_API_KEY`
 - `BSKY_HANDLE`
 - `BSKY_APP_PASSWORD`
-- `TG_BOT_TOKEN` (optional)
-- `TG_CHAT_ID` (optional)
 
 ## Configuration
 

@@ -6,7 +6,6 @@ import { generatePost } from './generator.js';
 import { countGraphemes, hashText } from './validate.js';
 import { BlueskyAuth, login, postWithImages } from './bluesky.js';
 import { BotState, ScheduleConfig, ensureToday, loadState, recordSuccess, saveState, loadSchedule } from './state.js';
-import { sendTelegramNotification } from './notify.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -94,12 +93,7 @@ async function main() {
   });
 
   if (dryRun) {
-    await sendTelegramNotification({
-      success: true,
-      postId: postId,
-      postText: fullText,
-      dryRun: true
-    });
+    console.log('Dry run complete - no post created');
     return;
   }
 
@@ -122,13 +116,6 @@ async function main() {
 
   await saveState(ROOT, state);
   console.log('State updated.');
-
-  await sendTelegramNotification({
-    success: true,
-    postId: postId,
-    postText: fullText,
-    dryRun: false
-  });
 }
 
 function isQuietHours(range: [string, string], now: Date): boolean {
@@ -161,11 +148,7 @@ function buildPostId(textHash: string): string {
   return cleaned || Date.now().toString(36);
 }
 
-main().catch(async (err) => {
+main().catch((err) => {
   console.error(err);
-  await sendTelegramNotification({
-    success: false,
-    error: String(err)
-  });
   process.exitCode = 1;
 });
