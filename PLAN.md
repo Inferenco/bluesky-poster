@@ -7,18 +7,18 @@ Nova AI integration plan (GPT-5-mini + docs)
      - POST /vector-store/files with base64 file contents.
      - Verify with GET /vector-store/files.
 
-2) Replace OpenAI generation with Nova Gateway /ai
+2) Nova generation via Gateway /ai
    - Update `src/generator.ts` to call POST https://gateway.inferenco.com/ai
      with Authorization: Bearer <NOVA_API_KEY>.
    - Request body fields per docs: input, model, verbosity, max_tokens, reasoning
      (use model = gpt-5-mini by default).
    - Parse the JSON response body, then parse `text` as JSON output
      (text + optional alt_overrides) and keep existing validation/fallback.
-   - Keep prompts grounded with voice + queue details and add a "fresh angle"
+   - Keep prompts grounded with voice + docs and add a "fresh angle"
      instruction to encourage novel posts.
 
 3) Configuration + secrets
-   - Replace OPENAI_* with NOVA_* env vars:
+   - Use NOVA_* env vars:
      - NOVA_API_KEY (required)
      - NOVA_MODEL (default gpt-5-mini)
      - NOVA_VERBOSITY (default Medium)

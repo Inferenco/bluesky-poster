@@ -2,10 +2,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { loadQueue, selectNext } from './queue.js';
 import { loadManifest, selectImages } from './images.js';
 import { generatePost } from './generator.js';
-import { MAX_GRAPHEMES, countGraphemes, hashText } from './validate.js';
+import { countGraphemes, hashText } from './validate.js';
 import { BlueskyAuth, login, postWithImages } from './bluesky.js';
 import { BotState, ScheduleConfig, ensureToday, loadState, recordSuccess, saveState } from './state.js';
 import { checkSafety } from './safety.js';
@@ -33,22 +32,9 @@ async function main() {
     return;
   }
 
-  const queue = await loadQueue(ROOT);
-  const selection = selectNext(queue, state.posted_ids);
-  if (!selection) {
-    console.log('No active queue items to post');
-    return;
-  }
-
-  const { item: next, isRecycled } = selection;
-  if (isRecycled) {
-    console.log(`Recycling topic "${next.id}" for fresh content generation`);
-  }
-
   const manifest = await loadManifest(ROOT);
   const images = selectImages(manifest, {
-    requestedIds: next.imageIds,
-    tags: next.tags,
+    tags: [],
     defaultImagesPerPost: schedule.default_images_per_post,
     maxImagesPerPost: schedule.max_images_per_post,
     recentImageIds: state.recent_image_ids
@@ -61,7 +47,9 @@ async function main() {
   await verifyImageSizes(images);
 
   const voice = await fs.readFile(path.join(ROOT, 'config', 'voice.md'), 'utf8');
-  const generation = await generatePost({ voice, item: next, images });
+  const generation = await generatePost({ voice, images });
+  const textHash = hashText(generation.text);
+  const postId = buildPostId(textHash);
 
   // Safety check
   const safetyResult = await checkSafety(ROOT, generation.text);
@@ -70,16 +58,19 @@ async function main() {
     console.error(errorMsg);
     await sendTelegramNotification({
       success: false,
-      postId: next.id,
+      postId: postId,
       error: errorMsg,
       dryRun
     });
     return;
   }
 
-  const textHash = hashText(generation.text);
   if (state.recent_text_hashes.includes(textHash)) {
     console.log('Generated text duplicates recent post; exiting to avoid repeat.');
+    return;
+  }
+  if (state.posted_ids.includes(postId)) {
+    console.log('Generated text matches previously posted content; exiting to avoid repeat.');
     return;
   }
 
@@ -100,11 +91,11 @@ async function main() {
   const payload = {
     text: generation.text,
     images: images.map((img, idx) => ({ asset: img, alt: finalAlt[idx] })),
-    rkey: next.id
+    rkey: postId
   };
 
   console.log('Ready to post:', {
-    id: next.id,
+    id: postId,
     text: generation.text,
     graphemes: countGraphemes(generation.text),
     images: images.map((i) => i.id),
@@ -117,7 +108,7 @@ async function main() {
   if (dryRun) {
     await sendTelegramNotification({
       success: true,
-      postId: next.id,
+      postId: postId,
       postText: generation.text,
       dryRun: true
     });
@@ -128,13 +119,13 @@ async function main() {
   const result = await postWithImages(agent, payload);
 
   if (result.alreadyExists) {
-    console.log(`Record with rkey ${next.id} already exists; marking as posted.`);
+    console.log(`Record with rkey ${postId} already exists; marking as posted.`);
   } else {
     console.log(`Posted: ${result.uri}`);
   }
 
   state = recordSuccess(state, schedule, {
-    id: next.id,
+    id: postId,
     textHash,
     imageIds: images.map((i) => i.id),
     when: now
@@ -146,7 +137,7 @@ async function main() {
   // Send success notification
   await sendTelegramNotification({
     success: true,
-    postId: next.id,
+    postId: postId,
     postText: generation.text,
     dryRun: false
   });
@@ -180,6 +171,12 @@ function envAuth(): BlueskyAuth {
     throw new Error('Missing BSKY_HANDLE/BSKY_APP_PASSWORD');
   }
   return { identifier, password };
+}
+
+function buildPostId(textHash: string): string {
+  const raw = textHash.startsWith('sha256:') ? textHash.slice('sha256:'.length) : textHash;
+  const cleaned = raw.replace(/[^a-z0-9]/gi, '');
+  return cleaned || Date.now().toString(36);
 }
 
 async function verifyImageSizes(images: { path: string }[]): Promise<void> {

@@ -2,7 +2,7 @@
 
 A small Node.js + TypeScript autoposter that runs on **GitHub Actions cron** (no server, no DB) and posts to **Bluesky only** from:
 
-- a static, local **content queue** (`content/queue.csv`)
+- uploaded **knowledge base docs** (via `scripts/upload-docs.ts`) + voice rules (`config/voice.md`)
 - a static, local **image pool** (`assets/images/processed/*` + `assets/images/manifest.json`)
 - a committed **state file** (`state/state.json`) so it never repeats
 
@@ -16,10 +16,10 @@ It generates post copy with Nova Gateway (GPT-5-mini by default), uploads 1–4 
 
 ## Reliability upgrades (vs “easy mode”)
 
-1. **Idempotent posting:** create the Bluesky record with a deterministic `rkey` derived from `queue.csv:id` (so workflow retries can’t double-post the same queue item).
+1. **Idempotent posting:** create the Bluesky record with a deterministic `rkey` derived from the normalized text hash (so workflow retries can’t double-post identical content).
 2. **Concurrency-safe Actions:** use workflow `concurrency` to prevent overlapping runs.
 3. **Fallback copy:** if Nova fails or output is invalid, post a deterministic template (or exit cleanly in `DRY_RUN`).
-4. **State stays small:** trim “recent” arrays to a fixed size; keep `posted_ids` as the canonical “never repeat” list.
+4. **State stays small:** trim “recent” arrays to a fixed size; keep `posted_ids` as the canonical “never repeat” list (hash-based IDs).
 
 ## Repo layout
 
@@ -29,7 +29,10 @@ It generates post copy with Nova Gateway (GPT-5-mini by default), uploads 1–4 
   schedule.json
 
 /content
-  queue.csv
+  blocked_phrases.txt
+
+/docs
+  ...              # optional knowledge base sources for upload
 
 /assets/images
   originals/        # gitignored (optional)
@@ -44,7 +47,6 @@ It generates post copy with Nova Gateway (GPT-5-mini by default), uploads 1–4 
   bluesky.ts        # login + upload + createRecord
   generator.ts      # Nova JSON generation + repair
   images.ts         # image selection + manifest loading
-  queue.ts          # CSV parsing + selection
   state.ts          # load/save + trimming
   validate.ts       # grapheme count + schema checks
 
@@ -55,21 +57,9 @@ It generates post copy with Nova Gateway (GPT-5-mini by default), uploads 1–4 
 
 ## Data files (schemas)
 
-### `content/queue.csv`
+### `content/blocked_phrases.txt`
 
-One row = one post. Minimal columns plus optional overrides.
-
-```csv
-id,topic,link,tags,cta,active,image_ids
-001,"Circle wallet multichain update","https://example.com","product;wallet;update","Try it today",true,
-002,"Dev tip: prompts that behave","https://example.com","dev;ai;tips","More tomorrow",true,"product-card-001;product-card-002"
-```
-
-- `tags`: semicolon-separated (`;`)
-- `active`: `true|false`
-- `image_ids` (optional): semicolon-separated IDs from `manifest.json` to force exact images
-
-Selection rule: pick the **first** row where `active=true` and `id` is not in `state.posted_ids` (deterministic, easy to reason about).
+One phrase per line. Posts containing any of these phrases are blocked.
 
 ### `assets/images/manifest.json`
 
@@ -110,7 +100,7 @@ Static pool definition (built by the preprocess script).
 
 ```json
 {
-  "posted_ids": ["001"],
+  "posted_ids": ["2f8c..."],
   "recent_text_hashes": ["sha256:..."],
   "recent_image_ids": ["product-card-001"],
   "posted_today_utc": "2025-12-15",
@@ -133,18 +123,16 @@ Commit `processed/` + `manifest.json`. Keep `originals/` gitignored if you want.
 
 ## Image selection (per post)
 
-1. If `queue.csv:image_ids` is provided: use those (1–4), validate they exist and are ≤1MB.
-2. Else:
-   - compute tag overlap score between queue tags and image tags
-   - prefer images not in `state.recent_image_ids`
-   - pick `N = min(default_images_per_post, max_images_per_post)` (at least 1 if available)
+1. Filter to images ≤1MB.
+2. Prefer images not in `state.recent_image_ids`.
+3. Pick `N = min(default_images_per_post, max_images_per_post)` (at least 1 if available), with a small random tie-breaker.
 
 ## Post generation (Nova) with strict output
 
 Inputs:
 
 - `config/voice.md` (tone rules)
-- queue fields (`topic`, `link`, `cta`, `tags`)
+- uploaded knowledge base docs
 - selected images’ `defaultAlt` (so copy matches visuals)
 
 Required model output (strict JSON):
@@ -162,7 +150,7 @@ Required model output (strict JSON):
 
 System:
 
-> You write concise Bluesky posts. Follow the provided voice rules. Use uploaded docs as primary source when relevant. Output JSON only (no markdown, no extra keys). Keep the framing fresh.
+> You write concise Bluesky posts. Follow the provided voice rules. Use uploaded docs as the primary source. Keep facts grounded; pick one specific idea and avoid generic filler. Vary the opening and framing. Do not include links unless explicitly present in the docs. Output JSON only (no markdown, no extra keys).
 
 User (template):
 
@@ -170,11 +158,8 @@ User (template):
 > {{voice_md}}
 >
 > Task:
-> Write a Bluesky post (max 300 graphemes, target ≤ 260) about:
-> - topic: {{topic}}
-> - link (optional): {{link}}
-> - call to action (optional): {{cta}}
-> - tags: {{tags}}
+> Write a Bluesky post (max 300 graphemes, target ≤ 260) grounded in the knowledge base.
+> Pick one specific idea; avoid generic filler. If an image is relevant, align with it without inventing details.
 >
 > Images (for grounding; do not invent details):
 > {{images_with_defaultAlt}}
@@ -211,12 +196,12 @@ Rules:
 Repair strategy:
 
 - If JSON invalid or `text` too long: make **one** “shorten/fix” call.
-- If still invalid: fall back to a deterministic template like `"{topic} {link} — {cta}"` trimmed to 300 graphemes.
+- If still invalid: fall back to a deterministic template like `"Quick note from the docs."` trimmed to 300 graphemes.
 
 De-dupe:
 
 - Normalize text (lowercase, collapse whitespace, strip common tracking params from URLs).
-- Hash with SHA-256 and compare to `state.recent_text_hashes` (regen once or fall back).
+- Hash with SHA-256 and compare to `state.recent_text_hashes` and `state.posted_ids` (exit without posting on duplicates).
 
 ## Bluesky posting flow (exact)
 
@@ -224,7 +209,7 @@ De-dupe:
 2. Upload each image as a blob (≤1MB, correct mime)
 3. Create the post record with an `app.bsky.embed.images` embed
 
-**Idempotency:** use `queue.id` as the record `rkey` when calling `com.atproto.repo.createRecord` for `app.bsky.feed.post`. If the record already exists, treat it as “already posted”, update state, and exit cleanly.
+**Idempotency:** use the normalized text hash as the record `rkey` when calling `com.atproto.repo.createRecord` for `app.bsky.feed.post`. If the record already exists, treat it as “already posted”, update state, and exit cleanly.
 
 ## Scheduling (GitHub Actions, no hosting)
 
@@ -345,8 +330,8 @@ Set `NOVA_BASE_URL` or pass `--base-url` to target a different gateway.
 - **Telegram notifications** — Optional alerts on post success/failure
 - **Idempotent posting** — Deterministic `rkey` prevents double-posting
 - **AI with fallback** — Nova generation with auto-repair and fallback templates
-- **Image handling** — Auto-selection based on tags, recency tracking
-- **Comprehensive tests** — 59+ tests covering all core modules
+- **Image handling** — Auto-selection with recency bias
+- **Comprehensive tests** — Core modules covered
 
 ### 🖼️ Adding Images
 
@@ -357,9 +342,9 @@ Set `NOVA_BASE_URL` or pass `--base-url` to target a different gateway.
 
 ### 📝 Adding Content
 
-Edit `content/queue.csv` with your topics:
+Posts are generated from your uploaded docs and `config/voice.md`.
+To change what gets posted:
 
-```csv
-id,topic,link,tags,cta,active,image_ids
-011,"Your topic here","https://link.com","tag1;tag2","Call to action",true,
-```
+1. Update files in `docs/` (or another dir).
+2. Run `npm run upload-docs`.
+3. Adjust `config/voice.md` if you want a new tone.

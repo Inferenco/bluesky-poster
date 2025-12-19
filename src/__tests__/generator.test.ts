@@ -1,17 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { generatePost } from '../generator.js';
 import type { ImageAsset } from '../images.js';
-import type { QueueItem } from '../queue.js';
-
-const baseItem: QueueItem = {
-    id: '001',
-    topic: 'Test topic',
-    link: 'https://example.com',
-    tags: ['test'],
-    cta: 'Learn more',
-    active: true,
-    imageIds: undefined
-};
 
 const baseImage: ImageAsset = {
     id: 'img-001',
@@ -26,7 +15,6 @@ const baseImage: ImageAsset = {
 
 const baseInput = {
     voice: 'Direct, concise, no hashtags.',
-    item: baseItem,
     images: [baseImage]
 };
 

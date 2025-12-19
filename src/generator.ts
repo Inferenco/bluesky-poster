@@ -1,5 +1,4 @@
 import { ImageAsset } from './images.js';
-import { QueueItem } from './queue.js';
 import { MAX_GRAPHEMES, countGraphemes, validateAltOverrides } from './validate.js';
 
 export interface GenerationResult {
@@ -18,7 +17,6 @@ export interface GenerationResult {
 
 export interface GenerationInput {
   voice: string;
-  item: QueueItem;
   images: ImageAsset[];
 }
 
@@ -89,13 +87,15 @@ function buildGeneratePrompt(input: GenerationInput): string {
   const instructions = [
     'You write concise Bluesky posts.',
     'Follow the provided voice rules.',
-    'Use uploaded docs as the primary source when relevant.',
+    'Use uploaded docs as the primary source.',
     'Keep facts grounded; do not invent details.',
-    'Make the framing fresh and non-repetitive each time.',
+    'Pick one specific idea from the docs; avoid generic filler.',
+    'Vary the opening and framing each time.',
+    'Do not include links unless explicitly present in the docs.',
     'Output JSON only (no markdown, no extra keys).'
   ].join(' ');
 
-  return `${instructions}\n\nVoice rules (authoritative):\n${input.voice}\n\nTask:\nWrite a Bluesky post (max 300 graphemes, target <= 260) about:\n- topic: ${input.item.topic}\n- link (optional): ${input.item.link || ''}\n- call to action (optional): ${input.item.cta || ''}\n- tags: ${input.item.tags.join(', ')}\n\nImages (for grounding; do not invent details):\n${imageContext}\n\nOutput JSON with:\n- text: string\n- alt_overrides: optional array of strings (only include if you are confidently improving the provided alts; never add new visual facts)`;
+  return `${instructions}\n\nVoice rules (authoritative):\n${input.voice}\n\nTask:\nWrite a Bluesky post (max 300 graphemes, target <= 260) grounded in the knowledge base. If an image is relevant, you may align the post with it without inventing visual details.\n\nImages (for grounding; do not invent details):\n${imageContext}\n\nOutput JSON with:\n- text: string\n- alt_overrides: optional array of strings (only include if you are confidently improving the provided alts; never add new visual facts)`;
 }
 
 function buildRepairPrompt(imageCount: number, original: any, validationError: string | undefined): string {
@@ -129,7 +129,8 @@ function safeParse(content: string): any | null {
 }
 
 function fallbackText(input: GenerationInput, reason: string): GenerationResult {
-  const base = `${input.item.topic} ${input.item.link || ''} ${input.item.cta ? `— ${input.item.cta}` : ''}`.trim();
+  const imageHint = input.images[0]?.defaultAlt;
+  const base = imageHint ? `Quick note: ${imageHint}` : 'Quick note from the docs.';
   const text = trimToMaxGraphemes(base, MAX_GRAPHEMES);
   return { text, alt_overrides: undefined, model: 'fallback', source: 'fallback' };
 }
