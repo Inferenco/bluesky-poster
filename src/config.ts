@@ -2,6 +2,7 @@ export interface AppConfig {
   databaseUrl: string;
   port: number;
   dryRun: boolean;
+  sessionSecret: string;
   dashboard: {
     user: string;
     password: string;
@@ -22,6 +23,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     databaseUrl,
     port: parsePort(env.PORT),
     dryRun: asBoolean(env.DRY_RUN),
+    sessionSecret: env.SESSION_SECRET ?? 'changeme-set-SESSION_SECRET',
     dashboard: {
       user: dashboardUser,
       password: dashboardPassword
