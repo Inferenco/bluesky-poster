@@ -51,7 +51,7 @@ export function validatePublicUrl(url: string): void {
   }
 }
 
-export interface PresignedUploadResult {
+interface PresignedUploadResult {
   uploadURL: string;
   objectKey: string;
   publicUrl: string;
@@ -92,7 +92,7 @@ export async function uploadBuffer(
   return { objectKey, publicUrl };
 }
 
-export async function createPresignedUpload(fileName: string): Promise<PresignedUploadResult> {
+async function createPresignedUpload(fileName: string): Promise<PresignedUploadResult> {
   const { bucketName, prefix } = getPublicBucketInfo();
   const ext = path.extname(fileName).toLowerCase() || '';
   const uniqueName = `${randomUUID()}${ext}`;

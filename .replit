@@ -1,6 +1,6 @@
 entrypoint = "src/server.ts"
 run = "npm run dev"
-modules = ["nodejs-20"]
+modules = ["nodejs-20", "python-3.11"]
 
 [gitHubImport]
 requiredFiles = [".replit", "replit.nix", "package.json"]

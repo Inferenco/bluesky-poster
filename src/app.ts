@@ -6,7 +6,7 @@ import type { AppConfig } from './config.js';
 import type { AssetRecord, RegisterLocalImageInput, RegisterObjectStorageImageInput } from './repositories/assets.js';
 import type { CreateMessageInput, MessageRecord, MessageStatus } from './repositories/messages.js';
 import { countGraphemes } from './validate.js';
-import { createPresignedUpload, derivePublicUrl, uploadBuffer, validatePublicObjectKey } from './replit_integrations/object_storage.js';
+import { uploadBuffer } from './replit_integrations/object_storage.js';
 
 export interface AppRepositories {
   messages: {
@@ -213,20 +213,6 @@ export async function buildApp(options: {
     return reply.redirect('/assets');
   });
 
-  app.post('/api/uploads/request-url', { preHandler: requireAuth }, async (request, reply) => {
-    const body = request.body as { name?: string; size?: number; contentType?: string };
-    const fileName = String(body.name ?? '');
-    if (!fileName) {
-      return reply.code(400).send({ error: 'name is required' });
-    }
-    try {
-      const result = await createPresignedUpload(fileName);
-      return reply.send(result);
-    } catch (err) {
-      return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
   app.post<{ Params: { id: string } }>('/assets/:id/delete', { preHandler: requireAuth }, async (request, reply) => {
     const assetId = request.params.id;
     const refCount = await options.repositories.messages.countReferencingAsset(assetId);
@@ -301,47 +287,6 @@ export async function buildApp(options: {
       return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
     }
 
-    return reply.send({ ok: true });
-  });
-
-  app.post('/assets/upload', { preHandler: requireAuth }, async (request, reply) => {
-    const body = request.body as {
-      objectKey?: string;
-      mimeType?: string;
-      altTextDefault?: string;
-      width?: number;
-      height?: number;
-      bytes?: number;
-    };
-
-    const objectKey = String(body.objectKey ?? '').trim();
-    const mimeType = String(body.mimeType ?? '').trim();
-    const altTextDefault = String(body.altTextDefault ?? '').trim();
-    const width = Number(body.width) || 0;
-    const height = Number(body.height) || 0;
-    const bytes = Number(body.bytes) || 0;
-
-    if (!objectKey || !mimeType || !altTextDefault) {
-      return reply.code(400).send({ error: 'objectKey, mimeType and altTextDefault are required' });
-    }
-
-    try {
-      validatePublicObjectKey(objectKey);
-    } catch (err) {
-      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
-    }
-
-    const publicUrl = derivePublicUrl(objectKey);
-
-    await options.repositories.assets.registerObjectStorageImage({
-      objectKey,
-      publicUrl,
-      mimeType,
-      altTextDefault,
-      width,
-      height,
-      bytes
-    });
     return reply.send({ ok: true });
   });
 
