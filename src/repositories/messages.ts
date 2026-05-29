@@ -183,6 +183,14 @@ export class MessagesRepository {
     await this.db.query('delete from messages where id = $1', [id]);
   }
 
+  async countReferencingAsset(assetId: string): Promise<number> {
+    const result = await this.db.query<{ count: string }>(
+      'select count(*)::text as count from messages where image_asset_id = $1',
+      [assetId]
+    );
+    return parseInt(result.rows[0]?.count ?? '0', 10);
+  }
+
   async markPosted(id: string, when: Date): Promise<void> {
     await this.db.query(
       `update messages

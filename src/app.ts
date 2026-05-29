@@ -15,6 +15,7 @@ export interface AppRepositories {
     update(id: string, input: Partial<CreateMessageInput>): Promise<MessageRecord>;
     setStatus(id: string, status: MessageStatus): Promise<void>;
     delete(id: string): Promise<void>;
+    countReferencingAsset(assetId: string): Promise<number>;
   };
   assets: {
     list(): Promise<AssetRecord[]>;
@@ -187,9 +188,10 @@ export async function buildApp(options: {
     return reply.type('text/html').send(renderPage('Runs', renderRuns(runs)));
   });
 
-  app.get('/assets', { preHandler: requireAuth }, async (_request, reply) => {
+  app.get<{ Querystring: { error?: string } }>('/assets', { preHandler: requireAuth }, async (request, reply) => {
     const assets = await options.repositories.assets.list();
-    return reply.type('text/html').send(renderPage('Assets', renderAssets(assets)));
+    const errorMsg = request.query.error ? decodeURIComponent(request.query.error) : null;
+    return reply.type('text/html').send(renderPage('Assets', renderAssets(assets, errorMsg)));
   });
 
   app.get('/assets/new', { preHandler: requireAuth }, async (_request, reply) => {
@@ -220,7 +222,15 @@ export async function buildApp(options: {
   });
 
   app.post<{ Params: { id: string } }>('/assets/:id/delete', { preHandler: requireAuth }, async (request, reply) => {
-    await options.repositories.assets.delete(request.params.id);
+    const assetId = request.params.id;
+    const refCount = await options.repositories.messages.countReferencingAsset(assetId);
+    if (refCount > 0) {
+      const msg = encodeURIComponent(
+        `Cannot delete: ${refCount} message${refCount === 1 ? ' is' : 's are'} still using this asset.`
+      );
+      return reply.redirect(`/assets?error=${msg}`);
+    }
+    await options.repositories.assets.delete(assetId);
     return reply.redirect('/assets');
   });
 
@@ -396,6 +406,8 @@ function renderPage(title: string, body: string): string {
     .full { grid-column: 1 / -1; }
     .form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
     .empty { background: var(--surface); border: 1px dashed var(--border); border-radius: 8px; padding: 28px; color: var(--muted); }
+    .banner { border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; font-size: 14px; }
+    .banner.error { background: #fef3f2; border: 1px solid #fecdca; color: #b42318; }
     @media (max-width: 760px) {
       .shell { grid-template-columns: 1fr; }
       nav { display: flex; gap: 8px; align-items: center; overflow-x: auto; padding: 14px; }
@@ -467,7 +479,10 @@ function renderMessageForm(action: string, assets: AssetRecord[], message?: Mess
   </form>`;
 }
 
-function renderAssets(assets: AssetRecord[]): string {
+function renderAssets(assets: AssetRecord[], errorMsg?: string | null): string {
+  const errorBanner = errorMsg
+    ? `<div class="banner error">${escapeHtml(errorMsg)}</div>`
+    : '';
   const rows = assets.map((asset) => {
     const thumbnail = asset.storage_kind === 'object_storage' && asset.public_url
       ? `<img src="${escapeHtml(asset.public_url)}" alt="${escapeHtml(asset.alt_text_default)}" style="width:48px;height:48px;object-fit:cover;border-radius:4px;display:block;">`
@@ -487,7 +502,7 @@ function renderAssets(assets: AssetRecord[]): string {
     </tr>`;
   }).join('');
 
-  return `<div class="page-head"><div><h2>Assets</h2><p class="muted">Register reusable images with default alt text before attaching them to saved messages.</p></div><a class="button primary" href="/assets/new">New asset</a></div>${rows ? `<table><thead><tr><th></th><th>Alt text</th><th>Storage</th><th>Location</th><th>MIME</th><th>Size</th><th>Bytes</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty">No image assets registered yet.</div>'}`;
+  return `${errorBanner}<div class="page-head"><div><h2>Assets</h2><p class="muted">Register reusable images with default alt text before attaching them to saved messages.</p></div><a class="button primary" href="/assets/new">New asset</a></div>${rows ? `<table><thead><tr><th></th><th>Alt text</th><th>Storage</th><th>Location</th><th>MIME</th><th>Size</th><th>Bytes</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty">No image assets registered yet.</div>'}`;
 }
 
 function renderAssetForm(): string {

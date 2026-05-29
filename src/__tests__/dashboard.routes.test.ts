@@ -82,6 +82,9 @@ function repositories(): AppRepositories {
       },
       delete: async (id) => {
         messages.delete(id);
+      },
+      countReferencingAsset: async (assetId) => {
+        return Array.from(messages.values()).filter((m) => m.image_asset_id === assetId).length;
       }
     },
     assets: {
