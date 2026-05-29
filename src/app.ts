@@ -343,20 +343,19 @@ function renderLoginPage(loginUrl: string): string {
   <title>Sign in - Bluesky Poster</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #f6f7f9; font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif; }
-    .card { background: #fff; border: 1px solid #d9dfe7; border-radius: 12px; padding: 48px 40px; width: 100%; max-width: 380px; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,.06); }
-    h1 { font-size: 22px; color: #151922; margin-bottom: 8px; }
+    body { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #eef2f8; font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .card { background: #fff; border: none; border-radius: 14px; padding: 48px 40px; width: 100%; max-width: 380px; text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,.07), 0 8px 32px rgba(0,0,0,.08); }
+    h1 { font-size: 22px; font-weight: 700; color: #151922; margin-bottom: 8px; letter-spacing: -.01em; }
     p { color: #626b7a; font-size: 14px; margin-bottom: 32px; line-height: 1.5; }
-    a.btn { display: inline-block; background: #0070f3; color: #fff; border-radius: 8px; padding: 12px 28px; font-size: 15px; font-weight: 600; text-decoration: none; transition: background .15s; }
-    a.btn:hover { background: #0051c3; }
+    a.btn { display: inline-block; background: linear-gradient(135deg, #00b4ff, #1463ff); color: #fff; border-radius: 999px; padding: 12px 28px; font-size: 15px; font-weight: 600; text-decoration: none; transition: opacity .15s; }
+    a.btn:hover { opacity: .88; }
   </style>
-  <script>window.location.replace(${JSON.stringify(loginUrl)});</script>
 </head>
 <body>
   <div class="card">
     <h1>Bluesky Poster</h1>
     <p>Sign in with your Replit account to access the dashboard.</p>
-    <a class="btn" href="${loginUrl}">Sign in with Replit</a>
+    <a class="btn" href="${loginUrl}" target="_top">Sign in with Replit</a>
   </div>
 </body>
 </html>`;
@@ -372,14 +371,15 @@ function renderPage(title: string, body: string): string {
   <style>
     :root {
       color-scheme: light;
-      --bg: #f6f7f9;
+      --bg: #eef2f8;
       --surface: #ffffff;
-      --surface-soft: #eef2f6;
+      --surface-soft: #f0f4fa;
       --text: #151922;
       --muted: #626b7a;
-      --border: #d9dfe7;
+      --border: #dce3ef;
       --accent: #1463ff;
       --accent-strong: #0a47c7;
+      --gradient-accent: linear-gradient(135deg, #00b4ff, #1463ff);
       --danger: #b42318;
       --warning: #b54708;
       --success: #067647;
@@ -390,19 +390,20 @@ function renderPage(title: string, body: string): string {
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
     .shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100vh; }
-    nav { background: #101722; color: #d7deea; padding: 24px 18px; }
-    nav h1 { color: #ffffff; font-size: 17px; line-height: 1.2; margin: 0 0 28px; }
-    nav a { display: block; color: #d7deea; border-radius: 6px; padding: 10px 12px; font-size: 14px; }
-    nav a:hover { background: rgba(255,255,255,.08); text-decoration: none; }
+    nav { background: #0d1117; color: #c9d1de; padding: 24px 18px; }
+    nav h1 { color: #ffffff; font-size: 18px; font-weight: 700; line-height: 1.2; margin: 0 0 28px; letter-spacing: -.01em; }
+    nav a { display: block; color: #c9d1de; border-radius: 6px; padding: 10px 12px; font-size: 14px; }
+    nav a:hover { background: rgba(255,255,255,.10); text-decoration: none; }
+    nav a.active { background: linear-gradient(135deg, rgba(0,180,255,.18), rgba(20,99,255,.18)); color: #ffffff; }
     main { padding: 28px clamp(18px, 4vw, 44px); }
     .page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
     h2 { font-size: 28px; line-height: 1.15; margin: 0; letter-spacing: 0; }
     .muted { color: var(--muted); font-size: 14px; }
-    .button, button { appearance: none; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 6px; padding: 8px 12px; font: inherit; font-size: 14px; cursor: pointer; }
-    .button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-    .button.primary:hover { background: var(--accent-strong); text-decoration: none; }
+    .button, button { appearance: none; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 999px; padding: 8px 16px; font: inherit; font-size: 14px; cursor: pointer; }
+    .button.primary { background: var(--gradient-accent); border-color: transparent; color: #fff; font-weight: 600; }
+    .button.primary:hover { opacity: .88; text-decoration: none; }
     button.danger { color: var(--danger); }
-    table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; background: var(--surface); border: none; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.07), 0 4px 16px rgba(0,0,0,.05); }
     th, td { padding: 12px 14px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; font-size: 14px; }
     th { background: var(--surface-soft); color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
     tr:last-child td { border-bottom: 0; }
@@ -412,16 +413,16 @@ function renderPage(title: string, body: string): string {
     .badge { display: inline-flex; align-items: center; min-height: 24px; border-radius: 999px; padding: 2px 9px; font-size: 12px; font-weight: 650; background: var(--surface-soft); color: var(--muted); }
     .badge.approved { background: #dcfae6; color: var(--success); }
     .badge.paused { background: #fff3cd; color: var(--warning); }
-    .badge.archived { background: #f3f4f6; color: #475467; }
-    .form-panel { max-width: 820px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+    .badge.archived { background: #e8ecf4; color: #475467; }
+    .form-panel { max-width: 820px; background: var(--surface); border: none; border-radius: 10px; padding: 20px; box-shadow: 0 1px 4px rgba(0,0,0,.07), 0 4px 16px rgba(0,0,0,.05); }
     .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
     label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; }
-    input, select, textarea { width: 100%; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text); padding: 9px 10px; font: inherit; font-size: 14px; }
+    input, select, textarea { width: 100%; border: 1px solid var(--border); border-radius: 8px; background: #fff; color: var(--text); padding: 9px 10px; font: inherit; font-size: 14px; }
     textarea { min-height: 150px; resize: vertical; grid-column: 1 / -1; }
     .full { grid-column: 1 / -1; }
     .form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
-    .empty { background: var(--surface); border: 1px dashed var(--border); border-radius: 8px; padding: 28px; color: var(--muted); }
-    .banner { border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; font-size: 14px; }
+    .empty { background: var(--surface); border: 1px dashed var(--border); border-radius: 10px; padding: 28px; color: var(--muted); box-shadow: 0 1px 4px rgba(0,0,0,.05); }
+    .banner { border-radius: 10px; padding: 12px 16px; margin-bottom: 16px; font-size: 14px; }
     .banner.error { background: #fef3f2; border: 1px solid #fecdca; color: #b42318; }
     @media (max-width: 760px) {
       .shell { grid-template-columns: 1fr; }
