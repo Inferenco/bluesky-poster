@@ -100,6 +100,7 @@ export class AssetsRepository {
     return result.rows[0];
   }
 
+  /** @deprecated Use registerObjectStorageImage — direct database blob storage is no longer used for new uploads. */
   async registerImageBuffer(input: RegisterImageBufferInput): Promise<AssetRecord> {
     if (!input.altTextDefault.trim()) {
       throw new Error('Asset alt text is required');

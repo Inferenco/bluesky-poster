@@ -74,6 +74,24 @@ export async function deleteObject(objectKey: string): Promise<void> {
   }
 }
 
+export async function uploadBuffer(
+  fileName: string,
+  buffer: Buffer,
+  mimeType: string
+): Promise<{ objectKey: string; publicUrl: string }> {
+  const { uploadURL, objectKey, publicUrl } = await createPresignedUpload(fileName);
+  const response = await fetch(uploadURL, {
+    method: 'PUT',
+    body: buffer,
+    headers: { 'Content-Type': mimeType },
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Failed to upload to object storage: ${response.status} ${body}`);
+  }
+  return { objectKey, publicUrl };
+}
+
 export async function createPresignedUpload(fileName: string): Promise<PresignedUploadResult> {
   const { bucketName, prefix } = getPublicBucketInfo();
   const ext = path.extname(fileName).toLowerCase() || '';

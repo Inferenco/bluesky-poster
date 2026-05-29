@@ -1,11 +1,12 @@
 import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyReply } from 'fastify';
 import formbody from '@fastify/formbody';
 import multipart from '@fastify/multipart';
+import sharp from 'sharp';
 import type { AppConfig } from './config.js';
-import type { AssetRecord, RegisterImageBufferInput, RegisterLocalImageInput, RegisterObjectStorageImageInput } from './repositories/assets.js';
+import type { AssetRecord, RegisterLocalImageInput, RegisterObjectStorageImageInput } from './repositories/assets.js';
 import type { CreateMessageInput, MessageRecord, MessageStatus } from './repositories/messages.js';
 import { countGraphemes } from './validate.js';
-import { createPresignedUpload, derivePublicUrl, validatePublicObjectKey } from './replit_integrations/object_storage.js';
+import { createPresignedUpload, derivePublicUrl, uploadBuffer, validatePublicObjectKey } from './replit_integrations/object_storage.js';
 
 export interface AppRepositories {
   messages: {
@@ -20,7 +21,6 @@ export interface AppRepositories {
   assets: {
     list(): Promise<AssetRecord[]>;
     registerLocalImage(input: RegisterLocalImageInput): Promise<AssetRecord>;
-    registerImageBuffer(input: RegisterImageBufferInput): Promise<AssetRecord>;
     registerObjectStorageImage(input: RegisterObjectStorageImageInput): Promise<AssetRecord>;
     delete(id: string): Promise<void>;
   };
@@ -234,6 +234,70 @@ export async function buildApp(options: {
     return reply.redirect('/assets');
   });
 
+  app.post('/assets/upload-multipart', { preHandler: requireAuth }, async (request, reply) => {
+    let fileBuffer: Buffer | null = null;
+    let fileName = '';
+    let mimeType = '';
+    let altTextDefault = '';
+
+    const parts = request.parts();
+    for await (const part of parts) {
+      if (part.type === 'file') {
+        fileName = part.filename;
+        mimeType = part.mimetype;
+        const chunks: Buffer[] = [];
+        for await (const chunk of part.file) {
+          chunks.push(chunk);
+        }
+        if (part.file.truncated) {
+          return reply.code(400).send({ error: 'Image must be 2 MB or smaller' });
+        }
+        fileBuffer = Buffer.concat(chunks);
+      } else {
+        if (part.fieldname === 'altTextDefault') {
+          altTextDefault = (part.value as string ?? '').trim();
+        }
+      }
+    }
+
+    if (!fileBuffer || !fileName) {
+      return reply.code(400).send({ error: 'No file uploaded' });
+    }
+    if (!altTextDefault) {
+      return reply.code(400).send({ error: 'Alt text is required' });
+    }
+    if (!mimeType.startsWith('image/')) {
+      return reply.code(400).send({ error: 'File must be an image' });
+    }
+
+    let metadata: Awaited<ReturnType<typeof sharp.prototype.metadata>>;
+    try {
+      metadata = await sharp(fileBuffer).metadata();
+    } catch {
+      return reply.code(400).send({ error: 'Could not read image metadata' });
+    }
+    if (!metadata.width || !metadata.height) {
+      return reply.code(400).send({ error: 'Could not read image dimensions' });
+    }
+
+    try {
+      const { objectKey, publicUrl } = await uploadBuffer(fileName, fileBuffer, mimeType);
+      await options.repositories.assets.registerObjectStorageImage({
+        objectKey,
+        publicUrl,
+        mimeType,
+        altTextDefault,
+        width: metadata.width,
+        height: metadata.height,
+        bytes: fileBuffer.length,
+      });
+    } catch (err) {
+      return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+
+    return reply.send({ ok: true });
+  });
+
   app.post('/assets/upload', { preHandler: requireAuth }, async (request, reply) => {
     const body = request.body as {
       objectKey?: string;
@@ -335,13 +399,13 @@ function renderLoginPage(loginUrl: string): string {
     a.btn { display: inline-block; background: #0070f3; color: #fff; border-radius: 8px; padding: 12px 28px; font-size: 15px; font-weight: 600; text-decoration: none; transition: background .15s; }
     a.btn:hover { background: #0051c3; }
   </style>
+  <script>window.location.replace(${JSON.stringify(loginUrl)});</script>
 </head>
 <body>
   <div class="card">
     <h1>Bluesky Poster</h1>
     <p>Sign in with your Replit account to access the dashboard.</p>
-    <a class="btn" href="${loginUrl}" target="_blank" rel="noopener noreferrer">Sign in with Replit</a>
-    <p style="margin-top:16px;font-size:13px;color:#626b7a;">After signing in, refresh this page.</p>
+    <a class="btn" href="${loginUrl}">Sign in with Replit</a>
   </div>
 </body>
 </html>`;
@@ -529,15 +593,6 @@ function renderAssetForm(): string {
     <div class="form-actions"><a class="button" href="/assets">Cancel</a><button class="button primary">Register path</button></div>
   </form>
   <script>
-async function getImageDimensions(file) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => { URL.revokeObjectURL(url); resolve({ width: img.naturalWidth, height: img.naturalHeight }); };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read image dimensions')); };
-    img.src = url;
-  });
-}
 async function startUpload(e) {
   e.preventDefault();
   const file = document.getElementById('uploadFile').files[0];
@@ -549,25 +604,12 @@ async function startUpload(e) {
   btn.disabled = true;
   status.style.color = 'var(--muted)';
   try {
-    status.textContent = 'Requesting upload URL\u2026';
-    const urlResp = await fetch('/api/uploads/request-url', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: file.name, size: file.size, contentType: file.type })
-    });
-    if (!urlResp.ok) { const e = await urlResp.json().catch(()=>({})); throw new Error(e.error || 'Failed to get upload URL'); }
-    const { uploadURL, objectKey, publicUrl } = await urlResp.json();
-    const dims = await getImageDimensions(file);
     status.textContent = 'Uploading to App Storage\u2026';
-    const putResp = await fetch(uploadURL, { method: 'PUT', body: file, headers: { 'Content-Type': file.type } });
-    if (!putResp.ok) throw new Error('Upload to storage failed (' + putResp.status + ')');
-    status.textContent = 'Saving asset record\u2026';
-    const saveResp = await fetch('/assets/upload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ objectKey, mimeType: file.type, altTextDefault: alt, width: dims.width, height: dims.height, bytes: file.size })
-    });
-    if (!saveResp.ok) { const e = await saveResp.json().catch(()=>({})); throw new Error(e.error || 'Failed to save asset'); }
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('altTextDefault', alt);
+    const resp = await fetch('/assets/upload-multipart', { method: 'POST', body: formData });
+    if (!resp.ok) { const e = await resp.json().catch(()=>({})); throw new Error(e.error || 'Upload failed'); }
     window.location.href = '/assets';
   } catch (err) {
     status.textContent = 'Error: ' + err.message;

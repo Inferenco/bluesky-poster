@@ -106,23 +106,6 @@ function repositories(): AppRepositories {
         assets.set(asset.id, asset);
         return asset;
       },
-      registerImageBuffer: async (input) => {
-        const asset: AssetRecord = {
-          id: `asset-${assets.size + 1}`,
-          storage_kind: 'database',
-          path_or_object_key: null,
-          public_url: null,
-          content: input.content,
-          mime_type: 'image/jpeg',
-          width: 10,
-          height: 10,
-          bytes: input.content.length,
-          alt_text_default: input.altTextDefault,
-          created_at: new Date('2026-05-29T10:00:00.000Z')
-        };
-        assets.set(asset.id, asset);
-        return asset;
-      },
       registerObjectStorageImage: async (input) => {
         const asset: AssetRecord = {
           id: `asset-${assets.size + 1}`,

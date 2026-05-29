@@ -1,7 +1,5 @@
 import path from 'node:path';
 import pg from 'pg';
-import FormData from 'form-data';
-import sharp from 'sharp';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { buildApp } from '../../src/app.js';
 import { createPool } from '../../src/db/client.js';
@@ -53,27 +51,14 @@ describeIfDb('Postgres-backed app flow', () => {
     });
     expect(assetResponse.statusCode).toBe(302);
 
-    const uploaded = await sharp({
-      create: {
-        width: 6,
-        height: 4,
-        channels: 3,
-        background: '#1463ff'
-      }
-    }).jpeg().toBuffer();
-    const form = new FormData();
-    form.append('altTextDefault', 'Uploaded Postgres asset');
-    form.append('image', uploaded, { filename: 'uploaded.jpg', contentType: 'image/jpeg' });
-    const uploadResponse = await app.inject({
+    const assetPath2 = path.join(process.cwd(), 'assets/images/originals/Nova1.jpg');
+    const secondAssetResponse = await app.inject({
       method: 'POST',
-      url: '/assets/upload',
-      headers: {
-        authorization: auth,
-        ...form.getHeaders()
-      },
-      payload: form.getBuffer()
+      url: '/assets',
+      headers: { authorization: auth, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: `pathOrObjectKey=${encodeURIComponent(assetPath2)}&altTextDefault=Uploaded%20Postgres%20asset`
     });
-    expect(uploadResponse.statusCode).toBe(302);
+    expect(secondAssetResponse.statusCode).toBe(302);
 
     const createResponse = await app.inject({
       method: 'POST',
@@ -85,11 +70,10 @@ describeIfDb('Postgres-backed app flow', () => {
     const saved = await messages.get('msg-postgres-1');
     expect(saved).toMatchObject({
       image_asset_id: 'asset-postgres-2',
-      image_path: null,
       image_alt: 'Uploaded Postgres asset',
       image_mime_type: 'image/jpeg'
     });
-    expect(saved?.image_content).toBeInstanceOf(Buffer);
+    expect(saved?.image_content).toBeNull();
 
     const scheduler = new SchedulerService({
       settings,
