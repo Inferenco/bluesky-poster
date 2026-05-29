@@ -1,0 +1,1 @@
+- [Replit preview auth fix](replit-preview-auth.md) — only 401 when Basic header is present; browser requests must fall through to Replit login redirect.

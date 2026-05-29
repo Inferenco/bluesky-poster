@@ -68,9 +68,9 @@ function makeRequireAuth(config: Pick<AppConfig, 'dashboard'>) {
           const password = decoded.slice(colon + 1);
           if (user === config.dashboard.user && password === config.dashboard.password) return;
         }
+        void reply.code(401).header('WWW-Authenticate', 'Basic realm="Dashboard"').send('Unauthorized');
+        return;
       }
-      void reply.code(401).header('WWW-Authenticate', 'Basic realm="Dashboard"').send('Unauthorized');
-      return;
     }
 
     const host = request.headers['host'] ?? '';
@@ -460,9 +460,9 @@ function renderMessages(messages: MessageRecord[]): string {
     <td>${escapeHtml(message.tags.join(', '))}</td>
     <td class="actions">
       <a href="/messages/${message.id}/edit">Edit</a>
-      <form method="post" action="/messages/${message.id}/status"><input type="hidden" name="status" value="paused"><button>Pause</button></form>
+      <form method="post" action="/messages/${message.id}/status"><input type="hidden" name="status" value="paused"><button onclick="return confirm('Pause this message? It will stop being selected for posting.')">Pause</button></form>
       <form method="post" action="/messages/${message.id}/status"><input type="hidden" name="status" value="approved"><button>Approve</button></form>
-      <form method="post" action="/messages/${message.id}/status"><input type="hidden" name="status" value="archived"><button>Archive</button></form>
+      <form method="post" action="/messages/${message.id}/status"><input type="hidden" name="status" value="archived"><button onclick="return confirm('Archive this message? It will be removed from the posting rotation.')">Archive</button></form>
       <form method="post" action="/messages/${message.id}/delete"><button class="danger" onclick="return confirm('Permanently delete this message? This cannot be undone.')">Delete</button></form>
     </td>
   </tr>`).join('');
