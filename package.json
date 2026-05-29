@@ -10,6 +10,7 @@
     "bluesky:check": "tsx src/tools/check-bluesky-session.ts",
     "bluesky:live-test": "tsx src/tools/live-test-post.ts",
     "preprocess-images": "tsx scripts/preprocess-images.ts",
+    "migrate-assets-to-object-storage": "tsx scripts/migrate-assets-to-object-storage.ts",
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "vitest run test/e2e",
