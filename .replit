@@ -1,0 +1,14 @@
+entrypoint = "src/server.ts"
+run = "npm run dev"
+
+[gitHubImport]
+requiredFiles = [".replit", "replit.nix", "package.json"]
+
+[deployment]
+build = "npm ci && npm run build"
+run = "npm run db:migrate && npm run start"
+ignorePorts = false
+
+[[ports]]
+localPort = 3000
+externalPort = 80
