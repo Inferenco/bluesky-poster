@@ -22,17 +22,24 @@ async function main(): Promise<void> {
   const runs = new RunsRepository(pool);
   const locks = new PgLockRepository(pool);
 
-  const publisher = config.bluesky.identifier && config.bluesky.appPassword
-    ? new AtprotoBlueskyPublisher(await getAgent({
-      identifier: config.bluesky.identifier,
-      password: config.bluesky.appPassword,
-      serviceUrl: config.bluesky.serviceUrl
-    }))
-    : {
-      async publish() {
-        throw new Error('Missing BSKY_IDENTIFIER/BSKY_APP_PASSWORD');
-      }
-    };
+  let publisher: { publish(message: import('./repositories/messages.js').MessageRecord): Promise<{ uri: string | null; cid: string | null }> };
+  if (config.bluesky.identifier && config.bluesky.appPassword) {
+    try {
+      const agent = await getAgent({
+        identifier: config.bluesky.identifier,
+        password: config.bluesky.appPassword,
+        serviceUrl: config.bluesky.serviceUrl
+      });
+      publisher = new AtprotoBlueskyPublisher(agent);
+      console.log('Bluesky login successful');
+    } catch (err) {
+      console.error('Bluesky login failed — server will start but posting is disabled:', err instanceof Error ? err.message : err);
+      publisher = { async publish() { throw new Error('Bluesky login failed at startup — check credentials'); } };
+    }
+  } else {
+    console.warn('BSKY_IDENTIFIER / BSKY_APP_PASSWORD not set — posting disabled');
+    publisher = { async publish() { throw new Error('Missing BSKY_IDENTIFIER/BSKY_APP_PASSWORD'); } };
+  }
 
   const poster = new PosterService({ publisher, runs, dryRun: config.dryRun });
   const scheduler = new SchedulerService({
