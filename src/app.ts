@@ -271,7 +271,8 @@ function renderLoginPage(loginUrl: string): string {
   <div class="card">
     <h1>Bluesky Poster</h1>
     <p>Sign in with your Replit account to access the dashboard.</p>
-    <a class="btn" href="${loginUrl}">Sign in with Replit</a>
+    <a class="btn" href="${loginUrl}" target="_blank" rel="noopener noreferrer">Sign in with Replit</a>
+    <p style="margin-top:16px;font-size:13px;color:#626b7a;">After signing in, refresh this page.</p>
   </div>
 </body>
 </html>`;
