@@ -15,22 +15,6 @@ export function getPublicBucketInfo(): { bucketName: string; prefix: string } {
   return { bucketName, prefix };
 }
 
-export function derivePublicUrl(objectKey: string): string {
-  const { bucketName } = getPublicBucketInfo();
-  return `https://storage.googleapis.com/${bucketName}/${objectKey}`;
-}
-
-export function validatePublicObjectKey(objectKey: string): void {
-  const { prefix } = getPublicBucketInfo();
-  const expectedPrefix = prefix ? `${prefix}/` : '';
-  if (expectedPrefix && !objectKey.startsWith(expectedPrefix)) {
-    throw new Error('Object key is not within the expected public storage prefix');
-  }
-  if (objectKey.includes('..') || objectKey.startsWith('/')) {
-    throw new Error('Object key contains invalid characters');
-  }
-}
-
 export function validatePublicUrl(url: string): void {
   const { bucketName, prefix } = getPublicBucketInfo();
   let parsed: URL;
