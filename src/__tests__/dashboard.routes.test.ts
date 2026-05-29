@@ -315,4 +315,77 @@ describe('dashboard routes', () => {
     expect(updateCalls).toBe(0);
     await app.close();
   });
+
+  test('blocks asset deletion when messages still reference it', async () => {
+    const repos = repositories();
+    const app = await buildApp({
+      config: { dashboard: { user: 'admin', password: 'secret' } },
+      repositories: repos
+    });
+
+    const createdAsset = await app.inject({
+      method: 'POST',
+      url: '/assets',
+      headers: { authorization: auth, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: 'pathOrObjectKey=assets%2Fimages%2Ftest.jpg&altTextDefault=Test+image'
+    });
+    expect(createdAsset.statusCode).toBe(302);
+
+    await app.inject({
+      method: 'POST',
+      url: '/messages',
+      headers: { authorization: auth, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: 'body=Post+with+asset&status=draft&weight=100&cooldownHours=168&imageAssetId=asset-1'
+    });
+
+    const deleteResponse = await app.inject({
+      method: 'POST',
+      url: '/assets/asset-1/delete',
+      headers: { authorization: auth }
+    });
+
+    expect(deleteResponse.statusCode).toBe(302);
+    const location = deleteResponse.headers['location'] as string;
+    expect(location).toMatch(/^\/assets\?error=/);
+    expect(decodeURIComponent(location)).toContain('Cannot delete');
+    expect(decodeURIComponent(location)).toContain('1 message is still using this asset');
+
+    const assetList = await app.inject({ method: 'GET', url: '/assets', headers: { authorization: auth } });
+    expect(assetList.body).toContain('Test image');
+
+    await app.close();
+  });
+
+  test('deletes an asset when no messages reference it', async () => {
+    const repos = repositories();
+    const app = await buildApp({
+      config: { dashboard: { user: 'admin', password: 'secret' } },
+      repositories: repos
+    });
+
+    const createdAsset = await app.inject({
+      method: 'POST',
+      url: '/assets',
+      headers: { authorization: auth, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: 'pathOrObjectKey=assets%2Fimages%2Funused.jpg&altTextDefault=Unused+image'
+    });
+    expect(createdAsset.statusCode).toBe(302);
+
+    const assetsBefore = await app.inject({ method: 'GET', url: '/assets', headers: { authorization: auth } });
+    expect(assetsBefore.body).toContain('Unused image');
+
+    const deleteResponse = await app.inject({
+      method: 'POST',
+      url: '/assets/asset-1/delete',
+      headers: { authorization: auth }
+    });
+
+    expect(deleteResponse.statusCode).toBe(302);
+    expect(deleteResponse.headers['location']).toBe('/assets');
+
+    const assetsAfter = await app.inject({ method: 'GET', url: '/assets', headers: { authorization: auth } });
+    expect(assetsAfter.body).not.toContain('Unused image');
+
+    await app.close();
+  });
 });
