@@ -151,10 +151,15 @@ export async function buildApp(options: {
 
   app.post('/settings', { preHandler: app.basicAuth }, async (request, reply) => {
     const body = form(request.body);
+    const intervals = parseSchedulerIntervals(body.minIntervalMinutes, body.maxIntervalMinutes);
+    if (!intervals) {
+      return reply.code(400).send('Intervals must be positive whole minutes, and maximum must be greater than or equal to minimum.');
+    }
+
     await options.repositories.settings.updateDashboardSettings({
       enabled: body.enabled === 'on',
-      minIntervalMinutes: Number(body.minIntervalMinutes),
-      maxIntervalMinutes: Number(body.maxIntervalMinutes)
+      minIntervalMinutes: intervals.minIntervalMinutes,
+      maxIntervalMinutes: intervals.maxIntervalMinutes
     });
     return reply.redirect('/settings');
   });
@@ -239,6 +244,17 @@ function listFromCsv(value: unknown): string[] {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function parseSchedulerIntervals(minValue: unknown, maxValue: unknown): { minIntervalMinutes: number; maxIntervalMinutes: number } | null {
+  const minIntervalMinutes = Number(minValue);
+  const maxIntervalMinutes = Number(maxValue);
+
+  if (!Number.isInteger(minIntervalMinutes) || !Number.isInteger(maxIntervalMinutes)) return null;
+  if (minIntervalMinutes < 1 || maxIntervalMinutes < 1) return null;
+  if (maxIntervalMinutes < minIntervalMinutes) return null;
+
+  return { minIntervalMinutes, maxIntervalMinutes };
 }
 
 function renderPage(title: string, body: string): string {

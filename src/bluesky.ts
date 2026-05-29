@@ -53,12 +53,16 @@ export class AtprotoBlueskyPublisher implements BlueskyPublisher {
       const blobRes = await this.agent.com.atproto.repo.uploadBlob(data, {
         encoding: message.image_mime_type ?? getImageMimeType(message.image_path ?? '')
       });
+      const image = {
+        image: blobRes.data.blob,
+        alt: message.image_alt ?? '',
+        ...(message.image_width && message.image_height
+          ? { aspectRatio: { width: message.image_width, height: message.image_height } }
+          : {})
+      };
       record.embed = {
         $type: 'app.bsky.embed.images',
-        images: [{
-          image: blobRes.data.blob,
-          alt: message.image_alt ?? ''
-        }]
+        images: [image]
       };
     }
 

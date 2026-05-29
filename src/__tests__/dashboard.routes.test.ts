@@ -281,4 +281,36 @@ describe('dashboard routes', () => {
     expect(settings.body).toContain('value="90"');
     await app.close();
   });
+
+  test.each([
+    ['empty minimum', 'enabled=on&minIntervalMinutes=&maxIntervalMinutes=90'],
+    ['non-integer minimum', 'enabled=on&minIntervalMinutes=1.5&maxIntervalMinutes=90'],
+    ['zero minimum', 'enabled=on&minIntervalMinutes=0&maxIntervalMinutes=90'],
+    ['negative maximum', 'enabled=on&minIntervalMinutes=30&maxIntervalMinutes=-1'],
+    ['maximum below minimum', 'enabled=on&minIntervalMinutes=90&maxIntervalMinutes=30']
+  ])('rejects invalid scheduler settings: %s', async (_name, payload) => {
+    const repos = repositories();
+    let updateCalls = 0;
+    const originalUpdate = repos.settings.updateDashboardSettings;
+    repos.settings.updateDashboardSettings = async (input) => {
+      updateCalls += 1;
+      return originalUpdate(input);
+    };
+    const app = await buildApp({
+      config: { dashboard: { user: 'admin', password: 'secret' } },
+      repositories: repos
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/settings',
+      headers: { authorization: auth, 'content-type': 'application/x-www-form-urlencoded' },
+      payload
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toContain('Intervals must be positive whole minutes, and maximum must be greater than or equal to minimum.');
+    expect(updateCalls).toBe(0);
+    await app.close();
+  });
 });

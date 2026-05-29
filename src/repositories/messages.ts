@@ -20,6 +20,8 @@ export interface MessageRecord {
   image_alt: string | null;
   image_content?: Buffer | null;
   image_mime_type?: string | null;
+  image_width?: number | null;
+  image_height?: number | null;
   normalised_hash: string;
   last_posted_at: Date | string | null;
   post_count: number;
@@ -93,7 +95,9 @@ export class MessagesRepository {
         coalesce(a.path_or_object_key, m.image_path) as image_path,
         coalesce(m.image_alt, a.alt_text_default) as image_alt,
         a.content as image_content,
-        a.mime_type as image_mime_type
+        a.mime_type as image_mime_type,
+        a.width as image_width,
+        a.height as image_height
       from messages m
       left join assets a on a.id = m.image_asset_id
       where m.status <> $1
@@ -110,7 +114,9 @@ export class MessagesRepository {
         coalesce(a.path_or_object_key, m.image_path) as image_path,
         coalesce(m.image_alt, a.alt_text_default) as image_alt,
         a.content as image_content,
-        a.mime_type as image_mime_type
+        a.mime_type as image_mime_type,
+        a.width as image_width,
+        a.height as image_height
       from messages m
       left join assets a on a.id = m.image_asset_id
       where m.id = $1`,
@@ -148,9 +154,9 @@ export class MessagesRepository {
         input.cooldownHours ?? current.cooldown_hours,
         JSON.stringify(input.tags ?? current.tags),
         JSON.stringify(input.selfLabels ?? current.self_labels),
-        input.imageAssetId ?? current.image_asset_id,
-        input.imagePath ?? current.image_path,
-        input.imageAlt ?? current.image_alt,
+        hasOwn(input, 'imageAssetId') ? input.imageAssetId : current.image_asset_id,
+        hasOwn(input, 'imagePath') ? input.imagePath : current.image_path,
+        hasOwn(input, 'imageAlt') ? input.imageAlt : current.image_alt,
         hashText(body)
       ]
     );
@@ -183,4 +189,8 @@ function validateMessageBody(body: string): void {
   if (countGraphemes(body) > MAX_GRAPHEMES) {
     throw new Error('Message must be 300 graphemes or fewer');
   }
+}
+
+function hasOwn<T extends object>(value: T, key: keyof T): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
 }

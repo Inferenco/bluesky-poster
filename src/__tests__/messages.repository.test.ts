@@ -51,4 +51,36 @@ describe('MessagesRepository', () => {
     await expect(repo.create({ body: 'x'.repeat(301) })).rejects.toThrow('Message must be 300 graphemes or fewer');
     expect(db.calls).toHaveLength(0);
   });
+
+  test('clears image fields when update receives explicit null values', async () => {
+    const db = new FakeDb();
+    db.rows = [{
+      id: 'msg-1',
+      body: 'Hello Bluesky',
+      status: 'approved',
+      weight: 100,
+      cooldown_hours: 168,
+      tags: [],
+      self_labels: [],
+      image_asset_id: 'asset-1',
+      image_path: 'assets/post.jpg',
+      image_alt: 'Existing alt',
+      normalised_hash: hashText('Hello Bluesky'),
+      last_posted_at: null,
+      post_count: 0,
+      created_at: new Date('2026-05-29T10:00:00.000Z'),
+      updated_at: new Date('2026-05-29T10:00:00.000Z')
+    }];
+    const repo = new MessagesRepository(db, () => 'msg-1');
+
+    await repo.update('msg-1', {
+      imageAssetId: null,
+      imagePath: null,
+      imageAlt: null
+    });
+
+    expect(db.calls[1].values[7]).toBeNull();
+    expect(db.calls[1].values[8]).toBeNull();
+    expect(db.calls[1].values[9]).toBeNull();
+  });
 });
