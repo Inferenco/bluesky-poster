@@ -1,9 +1,16 @@
-import { describe, expect, test } from 'vitest';
+import { vi, describe, expect, test } from 'vitest';
 import FormData from 'form-data';
 import sharp from 'sharp';
 import { buildApp, type AppRepositories } from '../app.js';
 import type { AssetRecord } from '../repositories/assets.js';
 import type { MessageRecord, MessageStatus } from '../repositories/messages.js';
+
+vi.mock('../replit_integrations/object_storage.js', () => ({
+  uploadBuffer: vi.fn().mockResolvedValue({
+    objectKey: 'uploads/test-uuid.png',
+    publicUrl: 'https://storage.googleapis.com/test-bucket/uploads/test-uuid.png'
+  })
+}));
 
 const auth = `Basic ${Buffer.from('admin:secret').toString('base64')}`;
 
@@ -358,5 +365,147 @@ describe('dashboard routes', () => {
     expect(assetsAfter.body).not.toContain('Unused image');
 
     await app.close();
+  });
+
+  describe('POST /assets/upload-multipart', () => {
+    async function makeValidImageBuffer(): Promise<Buffer> {
+      return sharp({
+        create: { width: 10, height: 10, channels: 3, background: { r: 100, g: 149, b: 237 } }
+      })
+        .png()
+        .toBuffer();
+    }
+
+    test('happy path: valid image and alt text returns 200 ok and registers asset', async () => {
+      const repos = repositories();
+      let registeredInput: Parameters<typeof repos.assets.registerObjectStorageImage>[0] | null = null;
+      const original = repos.assets.registerObjectStorageImage;
+      repos.assets.registerObjectStorageImage = async (input) => {
+        registeredInput = input;
+        return original(input);
+      };
+      const app = await buildApp({
+        config: { dashboard: { user: 'admin', password: 'secret' } },
+        repositories: repos
+      });
+
+      const imageBuffer = await makeValidImageBuffer();
+      const form = new FormData();
+      form.append('altTextDefault', 'A blue square');
+      form.append('file', imageBuffer, { filename: 'test.png', contentType: 'image/png' });
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/assets/upload-multipart',
+        headers: { authorization: auth, ...form.getHeaders() },
+        payload: form.getBuffer()
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ ok: true });
+      expect(registeredInput).not.toBeNull();
+      expect(registeredInput!.altTextDefault).toBe('A blue square');
+      expect(registeredInput!.mimeType).toBe('image/png');
+      expect(registeredInput!.width).toBe(10);
+      expect(registeredInput!.height).toBe(10);
+      expect(registeredInput!.objectKey).toBe('uploads/test-uuid.png');
+
+      await app.close();
+    });
+
+    test('returns 400 when no file is included', async () => {
+      const app = await buildApp({
+        config: { dashboard: { user: 'admin', password: 'secret' } },
+        repositories: repositories()
+      });
+
+      const form = new FormData();
+      form.append('altTextDefault', 'Some alt text');
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/assets/upload-multipart',
+        headers: { authorization: auth, ...form.getHeaders() },
+        payload: form.getBuffer()
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({ error: 'No file uploaded' });
+
+      await app.close();
+    });
+
+    test('returns 400 when alt text is missing', async () => {
+      const app = await buildApp({
+        config: { dashboard: { user: 'admin', password: 'secret' } },
+        repositories: repositories()
+      });
+
+      const imageBuffer = await makeValidImageBuffer();
+      const form = new FormData();
+      form.append('file', imageBuffer, { filename: 'test.png', contentType: 'image/png' });
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/assets/upload-multipart',
+        headers: { authorization: auth, ...form.getHeaders() },
+        payload: form.getBuffer()
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({ error: 'Alt text is required' });
+
+      await app.close();
+    });
+
+    test('returns 400 when file has a non-image MIME type', async () => {
+      const app = await buildApp({
+        config: { dashboard: { user: 'admin', password: 'secret' } },
+        repositories: repositories()
+      });
+
+      const form = new FormData();
+      form.append('altTextDefault', 'A document');
+      form.append('file', Buffer.from('%PDF-1.4 fake pdf content'), {
+        filename: 'document.pdf',
+        contentType: 'application/pdf'
+      });
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/assets/upload-multipart',
+        headers: { authorization: auth, ...form.getHeaders() },
+        payload: form.getBuffer()
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({ error: 'File must be an image' });
+
+      await app.close();
+    });
+
+    test('returns 400 when file exceeds the 2 MB size limit', async () => {
+      const app = await buildApp({
+        config: { dashboard: { user: 'admin', password: 'secret' } },
+        repositories: repositories()
+      });
+
+      const oversizedBuffer = Buffer.alloc(2_100_000, 0xff);
+      const form = new FormData();
+      form.append('altTextDefault', 'Too big');
+      form.append('file', oversizedBuffer, { filename: 'big.png', contentType: 'image/png' });
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/assets/upload-multipart',
+        headers: { authorization: auth, ...form.getHeaders() },
+        payload: form.getBuffer()
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({ error: 'Image must be 2 MB or smaller' });
+
+      await app.close();
+    });
   });
 });
