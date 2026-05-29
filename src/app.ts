@@ -133,8 +133,14 @@ export async function buildApp(options: {
   app.get<{ Params: { id: string } }>('/messages/:id/edit', { preHandler: requireAuth }, async (request, reply) => {
     const message = await options.repositories.messages.get(request.params.id);
     if (!message) return reply.code(404).send('Message not found');
-    const assets = await options.repositories.assets.list();
-    return reply.type('text/html').send(renderPage('Edit message', renderMessageForm(`/messages/${message.id}`, assets, message)));
+    const [assets, assetRefCount] = await Promise.all([
+      options.repositories.assets.list(),
+      message.image_asset_id
+        ? options.repositories.messages.countReferencingAsset(message.image_asset_id)
+        : Promise.resolve(0),
+    ]);
+    const otherRefCount = Math.max(0, assetRefCount - 1);
+    return reply.type('text/html').send(renderPage('Edit message', renderMessageForm(`/messages/${message.id}`, assets, message, otherRefCount)));
   });
 
   app.post<{ Params: { id: string } }>('/messages/:id', { preHandler: requireAuth }, async (request, reply) => {
@@ -519,11 +525,15 @@ function renderMessages(messages: MessageRecord[]): string {
   return `<div class="page-head"><div><h2>Messages</h2><p class="muted">Saved posts are selected by approval state, cooldown, recent duplicate history, and weight.</p></div><a class="button primary" href="/messages/new">New message</a></div>${rows ? `<table><thead><tr><th>Message</th><th>Status</th><th>Weight</th><th>Cooldown</th><th>Posts</th><th>Length</th><th>Tags</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty">No saved messages yet.</div>'}`;
 }
 
-function renderMessageForm(action: string, assets: AssetRecord[], message?: MessageRecord): string {
+function renderMessageForm(action: string, assets: AssetRecord[], message?: MessageRecord, assetOtherRefCount?: number): string {
   const assetOptions = [
     `<option value="">No image asset</option>`,
     ...assets.map((asset) => `<option value="${escapeHtml(asset.id)}"${message?.image_asset_id === asset.id ? ' selected' : ''}>${escapeHtml(asset.alt_text_default)} (${escapeHtml(asset.path_or_object_key ?? asset.storage_kind)})</option>`)
   ].join('');
+
+  const assetRefNote = message?.image_asset_id && assetOtherRefCount != null && assetOtherRefCount > 0
+    ? ` <span class="muted" title="Swapping or removing this asset will not affect other messages, but the asset may still be in use.">Used by ${assetOtherRefCount} other ${assetOtherRefCount === 1 ? 'message' : 'messages'}</span>`
+    : '';
 
   return `<div class="page-head"><div><h2>${message ? 'Edit' : 'New'} message</h2><p class="muted">Approved messages enter the scheduler pool. Drafts and paused messages stay out of rotation.</p></div></div>
   <form class="form-panel" method="post" action="${escapeHtml(action)}">
@@ -535,7 +545,7 @@ function renderMessageForm(action: string, assets: AssetRecord[], message?: Mess
     <label>Weight <input name="weight" type="number" min="1" value="${message?.weight ?? 100}"></label>
     <label>Cooldown hours <input name="cooldownHours" type="number" min="1" value="${message?.cooldown_hours ?? 168}"></label>
     <label>Tags <input name="tags" value="${escapeHtml(message?.tags.join(', ') ?? '')}"></label>
-    <label class="full">Registered asset <select name="imageAssetId">${assetOptions}</select></label>
+    <label class="full">Registered asset <select name="imageAssetId">${assetOptions}</select>${assetRefNote}</label>
     <label class="full">Image path <input name="imagePath" value="${escapeHtml(message?.image_path ?? '')}"></label>
     <label class="full">Image alt text <input name="imageAlt" value="${escapeHtml(message?.image_alt ?? '')}"></label>
     </div>
