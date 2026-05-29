@@ -3,6 +3,7 @@ import sharp from 'sharp';
 import { nanoid } from 'nanoid';
 import type { Queryable } from './messages.js';
 import { getImageMimeType } from '../services/poster.js';
+import { deleteObject } from '../replit_integrations/object_storage.js';
 
 const MAX_IMAGE_BYTES = 2_000_000;
 
@@ -137,6 +138,24 @@ export class AssetsRepository {
     );
 
     return result.rows[0];
+  }
+
+  async delete(id: string): Promise<void> {
+    const result = await this.db.query<AssetRecord>(
+      'delete from assets where id = $1 returning storage_kind, path_or_object_key',
+      [id]
+    );
+
+    const deleted = result.rows[0];
+    if (!deleted) return;
+
+    if (deleted.storage_kind === 'object_storage' && deleted.path_or_object_key) {
+      try {
+        await deleteObject(deleted.path_or_object_key);
+      } catch (err) {
+        console.error(`[assets] Failed to delete object from storage for asset ${id}:`, err);
+      }
+    }
   }
 
   async registerObjectStorageImage(input: RegisterObjectStorageImageInput): Promise<AssetRecord> {

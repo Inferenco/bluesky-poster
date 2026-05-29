@@ -20,6 +20,7 @@ export interface AppRepositories {
     registerLocalImage(input: RegisterLocalImageInput): Promise<AssetRecord>;
     registerImageBuffer(input: RegisterImageBufferInput): Promise<AssetRecord>;
     registerObjectStorageImage(input: RegisterObjectStorageImageInput): Promise<AssetRecord>;
+    delete(id: string): Promise<void>;
   };
   settings: {
     getDashboardSettings(): Promise<DashboardSettings>;
@@ -194,6 +195,11 @@ export async function buildApp(options: {
     } catch (err) {
       return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
     }
+  });
+
+  app.post<{ Params: { id: string } }>('/assets/:id/delete', { preHandler: requireAuth }, async (request, reply) => {
+    await options.repositories.assets.delete(request.params.id);
+    return reply.redirect('/assets');
   });
 
   app.post('/assets/upload', { preHandler: requireAuth }, async (request, reply) => {
@@ -455,10 +461,11 @@ function renderAssets(assets: AssetRecord[]): string {
       <td>${escapeHtml(asset.mime_type)}</td>
       <td>${asset.width}x${asset.height}</td>
       <td>${asset.bytes}</td>
+      <td class="actions"><form method="post" action="/assets/${escapeHtml(asset.id)}/delete"><button class="danger">Delete</button></form></td>
     </tr>`;
   }).join('');
 
-  return `<div class="page-head"><div><h2>Assets</h2><p class="muted">Register reusable images with default alt text before attaching them to saved messages.</p></div><a class="button primary" href="/assets/new">New asset</a></div>${rows ? `<table><thead><tr><th></th><th>Alt text</th><th>Storage</th><th>Location</th><th>MIME</th><th>Size</th><th>Bytes</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty">No image assets registered yet.</div>'}`;
+  return `<div class="page-head"><div><h2>Assets</h2><p class="muted">Register reusable images with default alt text before attaching them to saved messages.</p></div><a class="button primary" href="/assets/new">New asset</a></div>${rows ? `<table><thead><tr><th></th><th>Alt text</th><th>Storage</th><th>Location</th><th>MIME</th><th>Size</th><th>Bytes</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty">No image assets registered yet.</div>'}`;
 }
 
 function renderAssetForm(): string {

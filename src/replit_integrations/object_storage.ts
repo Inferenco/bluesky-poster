@@ -57,6 +57,23 @@ export interface PresignedUploadResult {
   publicUrl: string;
 }
 
+export async function deleteObject(objectKey: string): Promise<void> {
+  const { bucketName } = getPublicBucketInfo();
+  const response = await fetch(`${REPLIT_SIDECAR_ENDPOINT}/object-storage/object`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      bucket_name: bucketName,
+      object_name: objectKey,
+    }),
+  });
+
+  if (!response.ok && response.status !== 404) {
+    const body = await response.text();
+    throw new Error(`Failed to delete object from storage: ${response.status} ${body}`);
+  }
+}
+
 export async function createPresignedUpload(fileName: string): Promise<PresignedUploadResult> {
   const { bucketName, prefix } = getPublicBucketInfo();
   const ext = path.extname(fileName).toLowerCase() || '';

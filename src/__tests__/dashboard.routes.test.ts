@@ -136,6 +136,9 @@ function repositories(): AppRepositories {
         };
         assets.set(asset.id, asset);
         return asset;
+      },
+      delete: async (id) => {
+        assets.delete(id);
       }
     },
     settings: {
