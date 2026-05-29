@@ -512,7 +512,7 @@ function renderMessages(messages: MessageRecord[]): string {
       <form method="post" action="/messages/${message.id}/status"><input type="hidden" name="status" value="paused"><button>Pause</button></form>
       <form method="post" action="/messages/${message.id}/status"><input type="hidden" name="status" value="approved"><button>Approve</button></form>
       <form method="post" action="/messages/${message.id}/status"><input type="hidden" name="status" value="archived"><button>Archive</button></form>
-      <form method="post" action="/messages/${message.id}/delete"><button class="danger">Delete</button></form>
+      <form method="post" action="/messages/${message.id}/delete"><button class="danger" onclick="return confirm('Permanently delete this message? This cannot be undone.')">Delete</button></form>
     </td>
   </tr>`).join('');
 
