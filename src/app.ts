@@ -1,9 +1,10 @@
 import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyReply } from 'fastify';
 import formbody from '@fastify/formbody';
 import multipart from '@fastify/multipart';
-import type { AssetRecord, RegisterImageBufferInput, RegisterLocalImageInput } from './repositories/assets.js';
+import type { AssetRecord, RegisterImageBufferInput, RegisterLocalImageInput, RegisterObjectStorageImageInput } from './repositories/assets.js';
 import type { CreateMessageInput, MessageRecord, MessageStatus } from './repositories/messages.js';
 import { countGraphemes } from './validate.js';
+import { createPresignedUpload, derivePublicUrl, validatePublicObjectKey } from './replit_integrations/object_storage.js';
 
 export interface AppRepositories {
   messages: {
@@ -18,6 +19,7 @@ export interface AppRepositories {
     list(): Promise<AssetRecord[]>;
     registerLocalImage(input: RegisterLocalImageInput): Promise<AssetRecord>;
     registerImageBuffer(input: RegisterImageBufferInput): Promise<AssetRecord>;
+    registerObjectStorageImage(input: RegisterObjectStorageImageInput): Promise<AssetRecord>;
   };
   settings: {
     getDashboardSettings(): Promise<DashboardSettings>;
@@ -180,30 +182,59 @@ export async function buildApp(options: {
     return reply.redirect('/assets');
   });
 
+  app.post('/api/uploads/request-url', { preHandler: requireAuth }, async (request, reply) => {
+    const body = request.body as { name?: string; size?: number; contentType?: string };
+    const fileName = String(body.name ?? '');
+    if (!fileName) {
+      return reply.code(400).send({ error: 'name is required' });
+    }
+    try {
+      const result = await createPresignedUpload(fileName);
+      return reply.send(result);
+    } catch (err) {
+      return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   app.post('/assets/upload', { preHandler: requireAuth }, async (request, reply) => {
-    let fileName = '';
-    let content: Buffer | null = null;
-    let altTextDefault = '';
+    const body = request.body as {
+      objectKey?: string;
+      mimeType?: string;
+      altTextDefault?: string;
+      width?: number;
+      height?: number;
+      bytes?: number;
+    };
 
-    for await (const part of request.parts()) {
-      if (part.type === 'file') {
-        fileName = part.filename;
-        content = await part.toBuffer();
-      } else if (part.fieldname === 'altTextDefault') {
-        altTextDefault = String(part.value ?? '');
-      }
+    const objectKey = String(body.objectKey ?? '').trim();
+    const mimeType = String(body.mimeType ?? '').trim();
+    const altTextDefault = String(body.altTextDefault ?? '').trim();
+    const width = Number(body.width) || 0;
+    const height = Number(body.height) || 0;
+    const bytes = Number(body.bytes) || 0;
+
+    if (!objectKey || !mimeType || !altTextDefault) {
+      return reply.code(400).send({ error: 'objectKey, mimeType and altTextDefault are required' });
     }
 
-    if (!content) {
-      return reply.code(400).send('Image file is required');
+    try {
+      validatePublicObjectKey(objectKey);
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
     }
 
-    await options.repositories.assets.registerImageBuffer({
-      fileName,
-      content,
-      altTextDefault
+    const publicUrl = derivePublicUrl(objectKey);
+
+    await options.repositories.assets.registerObjectStorageImage({
+      objectKey,
+      publicUrl,
+      mimeType,
+      altTextDefault,
+      width,
+      height,
+      bytes
     });
-    return reply.redirect('/assets');
+    return reply.send({ ok: true });
   });
 
   return app;
@@ -409,35 +440,98 @@ function renderMessageForm(action: string, assets: AssetRecord[], message?: Mess
 }
 
 function renderAssets(assets: AssetRecord[]): string {
-  const rows = assets.map((asset) => `<tr>
-    <td>${escapeHtml(asset.alt_text_default)}</td>
-    <td>${escapeHtml(asset.storage_kind)}</td>
-    <td>${escapeHtml(asset.path_or_object_key ?? 'Postgres bytea')}</td>
-    <td>${escapeHtml(asset.mime_type)}</td>
-    <td>${asset.width}x${asset.height}</td>
-    <td>${asset.bytes}</td>
-  </tr>`).join('');
+  const rows = assets.map((asset) => {
+    const thumbnail = asset.storage_kind === 'object_storage' && asset.public_url
+      ? `<img src="${escapeHtml(asset.public_url)}" alt="${escapeHtml(asset.alt_text_default)}" style="width:48px;height:48px;object-fit:cover;border-radius:4px;display:block;">`
+      : '';
+    const locationCell = asset.storage_kind === 'object_storage' && asset.public_url
+      ? `<a href="${escapeHtml(asset.public_url)}" target="_blank" rel="noopener noreferrer" style="word-break:break-all;">${escapeHtml(asset.public_url)}</a>`
+      : escapeHtml(asset.path_or_object_key ?? 'Postgres bytea');
+    return `<tr>
+      <td>${thumbnail}</td>
+      <td>${escapeHtml(asset.alt_text_default)}</td>
+      <td>${escapeHtml(asset.storage_kind)}</td>
+      <td>${locationCell}</td>
+      <td>${escapeHtml(asset.mime_type)}</td>
+      <td>${asset.width}x${asset.height}</td>
+      <td>${asset.bytes}</td>
+    </tr>`;
+  }).join('');
 
-  return `<div class="page-head"><div><h2>Assets</h2><p class="muted">Register reusable images with default alt text before attaching them to saved messages.</p></div><a class="button primary" href="/assets/new">New asset</a></div>${rows ? `<table><thead><tr><th>Alt text</th><th>Storage</th><th>Path or key</th><th>MIME</th><th>Size</th><th>Bytes</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty">No image assets registered yet.</div>'}`;
+  return `<div class="page-head"><div><h2>Assets</h2><p class="muted">Register reusable images with default alt text before attaching them to saved messages.</p></div><a class="button primary" href="/assets/new">New asset</a></div>${rows ? `<table><thead><tr><th></th><th>Alt text</th><th>Storage</th><th>Location</th><th>MIME</th><th>Size</th><th>Bytes</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty">No image assets registered yet.</div>'}`;
 }
 
 function renderAssetForm(): string {
-  return `<div class="page-head"><div><h2>New asset</h2><p class="muted">For local and GitHub-import deployments, use a repo path. For future object storage, this field can become an object key.</p></div></div>
-  <form class="form-panel" method="post" action="/assets/upload" enctype="multipart/form-data">
+  return `<div class="page-head"><div><h2>New asset</h2><p class="muted">Upload an image to App Storage, or register a local file path.</p></div></div>
+  <div class="form-panel" id="objectUploadPanel">
+    <p style="margin:0 0 14px;font-size:13px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Upload to App Storage</p>
     <div class="form-grid">
-      <label class="full">Upload image to Postgres <input type="file" name="image" accept="image/*"></label>
-      <label class="full">Default alt text <input name="altTextDefault" placeholder="Describe the uploaded image for Bluesky alt text"></label>
+      <label class="full">Image file <input id="uploadFile" type="file" accept="image/*" required></label>
+      <label class="full">Default alt text <input id="uploadAlt" placeholder="Describe the image for Bluesky alt text" required></label>
     </div>
-    <div class="form-actions"><button class="button primary">Upload asset</button></div>
-  </form>
+    <div class="form-actions" style="align-items:center;">
+      <span id="uploadStatus" style="font-size:13px;color:var(--muted);margin-right:auto;"></span>
+      <a class="button" href="/assets">Cancel</a>
+      <button class="button primary" id="uploadBtn" onclick="startUpload(event)">Upload to App Storage</button>
+    </div>
+  </div>
   <br>
   <form class="form-panel" method="post" action="/assets">
+    <p style="margin:0 0 14px;font-size:13px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Register local file path</p>
     <div class="form-grid">
       <label class="full">Path or object key <input name="pathOrObjectKey" placeholder="assets/images/originals/Nova1.jpg"></label>
       <label class="full">Default alt text <input name="altTextDefault" placeholder="Describe the image for Bluesky alt text"></label>
     </div>
-    <div class="form-actions"><a class="button" href="/assets">Cancel</a><button class="button primary">Register asset</button></div>
-  </form>`;
+    <div class="form-actions"><a class="button" href="/assets">Cancel</a><button class="button primary">Register path</button></div>
+  </form>
+  <script>
+async function getImageDimensions(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => { URL.revokeObjectURL(url); resolve({ width: img.naturalWidth, height: img.naturalHeight }); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read image dimensions')); };
+    img.src = url;
+  });
+}
+async function startUpload(e) {
+  e.preventDefault();
+  const file = document.getElementById('uploadFile').files[0];
+  const alt = document.getElementById('uploadAlt').value.trim();
+  const status = document.getElementById('uploadStatus');
+  const btn = document.getElementById('uploadBtn');
+  if (!file) { status.textContent = 'Please select an image file.'; status.style.color = 'var(--danger)'; return; }
+  if (!alt) { status.textContent = 'Alt text is required.'; status.style.color = 'var(--danger)'; return; }
+  btn.disabled = true;
+  status.style.color = 'var(--muted)';
+  try {
+    status.textContent = 'Requesting upload URL\u2026';
+    const urlResp = await fetch('/api/uploads/request-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: file.name, size: file.size, contentType: file.type })
+    });
+    if (!urlResp.ok) { const e = await urlResp.json().catch(()=>({})); throw new Error(e.error || 'Failed to get upload URL'); }
+    const { uploadURL, objectKey, publicUrl } = await urlResp.json();
+    const dims = await getImageDimensions(file);
+    status.textContent = 'Uploading to App Storage\u2026';
+    const putResp = await fetch(uploadURL, { method: 'PUT', body: file, headers: { 'Content-Type': file.type } });
+    if (!putResp.ok) throw new Error('Upload to storage failed (' + putResp.status + ')');
+    status.textContent = 'Saving asset record\u2026';
+    const saveResp = await fetch('/assets/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ objectKey, mimeType: file.type, altTextDefault: alt, width: dims.width, height: dims.height, bytes: file.size })
+    });
+    if (!saveResp.ok) { const e = await saveResp.json().catch(()=>({})); throw new Error(e.error || 'Failed to save asset'); }
+    window.location.href = '/assets';
+  } catch (err) {
+    status.textContent = 'Error: ' + err.message;
+    status.style.color = 'var(--danger)';
+    btn.disabled = false;
+  }
+}
+  </script>`;
 }
 
 function renderSettings(settings: DashboardSettings): string {

@@ -4,6 +4,7 @@ import { BskyAgent, RichText, type BlobRef } from '@atproto/api';
 import { ImageAsset } from './images.js';
 import type { MessageRecord } from './repositories/messages.js';
 import { getImageMimeType, type BlueskyPublisher } from './services/poster.js';
+import { validatePublicUrl } from './replit_integrations/object_storage.js';
 
 export interface BlueskyAuth {
   identifier: string;
@@ -48,10 +49,22 @@ export class AtprotoBlueskyPublisher implements BlueskyPublisher {
       tags: message.tags.slice(0, 8)
     };
 
-    if (message.image_path || message.image_content) {
-      const data = message.image_content ?? await fs.readFile(path.resolve(process.cwd(), message.image_path ?? ''));
+    if (message.image_path || message.image_content || message.image_public_url) {
+      let data: Buffer;
+      if (message.image_public_url) {
+        validatePublicUrl(message.image_public_url);
+        const resp = await fetch(message.image_public_url);
+        if (!resp.ok) throw new Error(`Failed to fetch image from object storage: ${resp.status}`);
+        data = Buffer.from(await resp.arrayBuffer());
+      } else if (message.image_content) {
+        data = message.image_content;
+      } else {
+        data = await fs.readFile(path.resolve(process.cwd(), message.image_path ?? ''));
+      }
+      const mimeType = message.image_mime_type ??
+        (message.image_public_url ? 'image/jpeg' : getImageMimeType(message.image_path ?? ''));
       const blobRes = await this.agent.com.atproto.repo.uploadBlob(data, {
-        encoding: message.image_mime_type ?? getImageMimeType(message.image_path ?? '')
+        encoding: mimeType
       });
       const image = {
         image: blobRes.data.blob,

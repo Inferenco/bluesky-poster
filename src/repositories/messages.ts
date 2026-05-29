@@ -22,6 +22,7 @@ export interface MessageRecord {
   image_mime_type?: string | null;
   image_width?: number | null;
   image_height?: number | null;
+  image_public_url?: string | null;
   normalised_hash: string;
   last_posted_at: Date | string | null;
   post_count: number;
@@ -92,12 +93,17 @@ export class MessagesRepository {
     const result = await this.db.query<MessageRecord>(
       `select
         m.*,
-        coalesce(a.path_or_object_key, m.image_path) as image_path,
+        case when a.storage_kind = 'object_storage' then null
+             else coalesce(a.path_or_object_key, m.image_path)
+        end as image_path,
         coalesce(m.image_alt, a.alt_text_default) as image_alt,
-        a.content as image_content,
+        case when a.storage_kind = 'object_storage' then null
+             else a.content
+        end as image_content,
         a.mime_type as image_mime_type,
         a.width as image_width,
-        a.height as image_height
+        a.height as image_height,
+        a.public_url as image_public_url
       from messages m
       left join assets a on a.id = m.image_asset_id
       where m.status <> $1
@@ -111,12 +117,17 @@ export class MessagesRepository {
     const result = await this.db.query<MessageRecord>(
       `select
         m.*,
-        coalesce(a.path_or_object_key, m.image_path) as image_path,
+        case when a.storage_kind = 'object_storage' then null
+             else coalesce(a.path_or_object_key, m.image_path)
+        end as image_path,
         coalesce(m.image_alt, a.alt_text_default) as image_alt,
-        a.content as image_content,
+        case when a.storage_kind = 'object_storage' then null
+             else a.content
+        end as image_content,
         a.mime_type as image_mime_type,
         a.width as image_width,
-        a.height as image_height
+        a.height as image_height,
+        a.public_url as image_public_url
       from messages m
       left join assets a on a.id = m.image_asset_id
       where m.id = $1`,

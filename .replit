@@ -30,6 +30,7 @@ BSKY_SERVICE_URL = "https://bsky.social"
 
 [agent]
 expertMode = true
+integrations = ["javascript_object_storage:2.0.0"]
 
 [workflows]
 runButton = "Project"

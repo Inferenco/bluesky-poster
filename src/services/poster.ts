@@ -72,7 +72,7 @@ export async function validateOutboundMessage(message: MessageRecord): Promise<v
     throw new Error('Message must be 300 graphemes or fewer');
   }
 
-  const hasImage = Boolean(message.image_path || message.image_content);
+  const hasImage = Boolean(message.image_path || message.image_content || message.image_public_url);
   if (hasImage && !message.image_alt?.trim()) {
     throw new Error('Image alt text is required');
   }
@@ -83,9 +83,11 @@ export async function validateOutboundMessage(message: MessageRecord): Promise<v
       throw new Error('Image MIME type must start with image/');
     }
 
-    const bytes = message.image_content?.length ?? (message.image_path ? (await fs.stat(path.resolve(process.cwd(), message.image_path))).size : 0);
-    if (bytes > MAX_IMAGE_BYTES) {
-      throw new Error('Image must be 2 MB or smaller');
+    if (!message.image_public_url) {
+      const bytes = message.image_content?.length ?? (message.image_path ? (await fs.stat(path.resolve(process.cwd(), message.image_path))).size : 0);
+      if (bytes > MAX_IMAGE_BYTES) {
+        throw new Error('Image must be 2 MB or smaller');
+      }
     }
   }
 }

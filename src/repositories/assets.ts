@@ -8,8 +8,9 @@ const MAX_IMAGE_BYTES = 2_000_000;
 
 export interface AssetRecord {
   id: string;
-  storage_kind: 'local' | 'database';
+  storage_kind: 'local' | 'database' | 'object_storage';
   path_or_object_key: string | null;
+  public_url: string | null;
   content: Buffer | null;
   mime_type: string;
   width: number;
@@ -27,6 +28,16 @@ export interface RegisterLocalImageInput {
 export interface RegisterImageBufferInput {
   fileName: string;
   content: Buffer;
+  altTextDefault: string;
+}
+
+export interface RegisterObjectStorageImageInput {
+  objectKey: string;
+  publicUrl: string;
+  mimeType: string;
+  width: number;
+  height: number;
+  bytes: number;
   altTextDefault: string;
 }
 
@@ -68,13 +79,14 @@ export class AssetsRepository {
 
     const result = await this.db.query<AssetRecord>(
       `insert into assets (
-        id, storage_kind, path_or_object_key, content, mime_type, width, height, bytes, alt_text_default
-      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        id, storage_kind, path_or_object_key, public_url, content, mime_type, width, height, bytes, alt_text_default
+      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       returning *`,
       [
         this.createId(),
         'local',
         input.pathOrObjectKey,
+        null,
         null,
         mimeType,
         metadata.width,
@@ -107,18 +119,55 @@ export class AssetsRepository {
 
     const result = await this.db.query<AssetRecord>(
       `insert into assets (
-        id, storage_kind, path_or_object_key, content, mime_type, width, height, bytes, alt_text_default
-      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        id, storage_kind, path_or_object_key, public_url, content, mime_type, width, height, bytes, alt_text_default
+      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       returning *`,
       [
         this.createId(),
         'database',
+        null,
         null,
         input.content,
         mimeType,
         metadata.width,
         metadata.height,
         input.content.length,
+        input.altTextDefault.trim()
+      ]
+    );
+
+    return result.rows[0];
+  }
+
+  async registerObjectStorageImage(input: RegisterObjectStorageImageInput): Promise<AssetRecord> {
+    if (!input.altTextDefault.trim()) {
+      throw new Error('Asset alt text is required');
+    }
+    if (!input.mimeType.startsWith('image/')) {
+      throw new Error('Asset MIME type must start with image/');
+    }
+    if (input.bytes > MAX_IMAGE_BYTES) {
+      throw new Error('Asset image must be 2 MB or smaller');
+    }
+    if (!input.width || !input.height) {
+      throw new Error('Asset image dimensions are required');
+    }
+
+    const result = await this.db.query<AssetRecord>(
+      `insert into assets (
+        id, storage_kind, path_or_object_key, public_url, content, mime_type, width, height, bytes, alt_text_default
+      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      returning *`,
+      [
+        this.createId(),
+        'object_storage',
+        input.objectKey,
+        input.publicUrl,
+        null,
+        input.mimeType,
+        input.width,
+        input.height,
+        input.bytes,
         input.altTextDefault.trim()
       ]
     );

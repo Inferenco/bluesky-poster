@@ -11,8 +11,14 @@ const root = path.resolve(__dirname, '../..');
 export async function migrate(databaseUrl = loadConfig().databaseUrl): Promise<void> {
   const pool = createPool(databaseUrl);
   try {
-    const sql = await fs.readFile(path.join(root, 'db', '001_init.sql'), 'utf8');
-    await pool.query(sql);
+    const dbDir = path.join(root, 'db');
+    const files = (await fs.readdir(dbDir))
+      .filter((f) => f.endsWith('.sql'))
+      .sort();
+    for (const file of files) {
+      const sql = await fs.readFile(path.join(dbDir, file), 'utf8');
+      await pool.query(sql);
+    }
   } finally {
     await pool.end();
   }

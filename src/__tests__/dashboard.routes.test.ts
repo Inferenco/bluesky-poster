@@ -91,6 +91,7 @@ function repositories(): AppRepositories {
           id: `asset-${assets.size + 1}`,
           storage_kind: 'local',
           path_or_object_key: input.pathOrObjectKey,
+          public_url: null,
           content: null,
           mime_type: 'image/jpeg',
           width: 10,
@@ -107,11 +108,29 @@ function repositories(): AppRepositories {
           id: `asset-${assets.size + 1}`,
           storage_kind: 'database',
           path_or_object_key: null,
+          public_url: null,
           content: input.content,
           mime_type: 'image/jpeg',
           width: 10,
           height: 10,
           bytes: input.content.length,
+          alt_text_default: input.altTextDefault,
+          created_at: new Date('2026-05-29T10:00:00.000Z')
+        };
+        assets.set(asset.id, asset);
+        return asset;
+      },
+      registerObjectStorageImage: async (input) => {
+        const asset: AssetRecord = {
+          id: `asset-${assets.size + 1}`,
+          storage_kind: 'object_storage',
+          path_or_object_key: input.objectKey,
+          public_url: input.publicUrl,
+          content: null,
+          mime_type: input.mimeType,
+          width: input.width,
+          height: input.height,
+          bytes: input.bytes,
           alt_text_default: input.altTextDefault,
           created_at: new Date('2026-05-29T10:00:00.000Z')
         };
@@ -227,37 +246,31 @@ describe('dashboard routes', () => {
     await app.close();
   });
 
-  test('uploads image assets into database-backed storage', async () => {
+  test('saves object storage asset record via JSON upload endpoint', async () => {
     const app = await buildApp({
       config: { dashboard: { user: 'admin', password: 'secret' } },
       repositories: repositories()
     });
-    const image = await sharp({
-      create: {
-        width: 3,
-        height: 3,
-        channels: 3,
-        background: '#1463ff'
-      }
-    }).jpeg().toBuffer();
-    const form = new FormData();
-    form.append('altTextDefault', 'Uploaded dashboard asset');
-    form.append('image', image, { filename: 'uploaded.jpg', contentType: 'image/jpeg' });
 
     const response = await app.inject({
       method: 'POST',
       url: '/assets/upload',
-      headers: {
-        authorization: auth,
-        ...form.getHeaders()
-      },
-      payload: form.getBuffer()
+      headers: { authorization: auth, 'content-type': 'application/json', 'x-replit-user-id': '123' },
+      payload: JSON.stringify({
+        objectKey: 'public/uploads/test-uuid.jpg',
+        mimeType: 'image/jpeg',
+        altTextDefault: 'Uploaded dashboard asset',
+        width: 3,
+        height: 3,
+        bytes: 1234
+      })
     });
 
-    expect(response.statusCode).toBe(302);
-    const assets = await app.inject({ method: 'GET', url: '/assets', headers: { authorization: auth } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true });
+    const assets = await app.inject({ method: 'GET', url: '/assets', headers: { authorization: auth, 'x-replit-user-id': '123' } });
     expect(assets.body).toContain('Uploaded dashboard asset');
-    expect(assets.body).toContain('database');
+    expect(assets.body).toContain('object_storage');
 
     await app.close();
   });
