@@ -68,9 +68,9 @@ function makeRequireAuth(config: Pick<AppConfig, 'dashboard'>) {
           const password = decoded.slice(colon + 1);
           if (user === config.dashboard.user && password === config.dashboard.password) return;
         }
-        void reply.code(401).header('WWW-Authenticate', 'Basic realm="Dashboard"').send('Unauthorized');
-        return;
       }
+      void reply.code(401).header('WWW-Authenticate', 'Basic realm="Dashboard"').send('Unauthorized');
+      return;
     }
 
     const host = request.headers['host'] ?? '';

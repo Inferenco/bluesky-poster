@@ -21,8 +21,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     port: parsePort(env.PORT),
     dryRun: asBoolean(env.DRY_RUN),
     dashboard: {
-      user: env.DASHBOARD_ADMIN_USER ?? '',
-      password: env.DASHBOARD_ADMIN_PASSWORD ?? ''
+      user: required(env, 'DASHBOARD_ADMIN_USER'),
+      password: required(env, 'DASHBOARD_ADMIN_PASSWORD')
     },
     bluesky: {
       identifier: env.BSKY_IDENTIFIER ?? env.BSKY_HANDLE ?? null,
