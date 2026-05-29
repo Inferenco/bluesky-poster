@@ -78,6 +78,6 @@ async function schedulerLoop(scheduler: SchedulerService): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
+  console.error('Fatal startup error:', err instanceof Error ? err.message : err);
+  process.exit(1);
 });
