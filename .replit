@@ -1,5 +1,6 @@
 entrypoint = "src/server.ts"
 run = "npm run dev"
+modules = ["nodejs-20"]
 
 [gitHubImport]
 requiredFiles = [".replit", "replit.nix", "package.json"]
@@ -12,3 +13,13 @@ ignorePorts = false
 [[ports]]
 localPort = 3000
 externalPort = 80
+
+[nix]
+channel = "stable-25_05"
+
+[userenv]
+
+[userenv.shared]
+PORT = "3000"
+DRY_RUN = "true"
+BSKY_SERVICE_URL = "https://bsky.social"
