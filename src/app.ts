@@ -483,7 +483,7 @@ function renderAssets(assets: AssetRecord[]): string {
       <td>${escapeHtml(asset.mime_type)}</td>
       <td>${asset.width}x${asset.height}</td>
       <td>${asset.bytes}</td>
-      <td class="actions"><form method="post" action="/assets/${escapeHtml(asset.id)}/delete"><button class="danger">Delete</button></form></td>
+      <td class="actions"><form method="post" action="/assets/${escapeHtml(asset.id)}/delete"><button class="danger" onclick="return confirm('Permanently delete this asset from storage? This cannot be undone.')">Delete</button></form></td>
     </tr>`;
   }).join('');
 
