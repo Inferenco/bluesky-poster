@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyReply } from 'fastify';
 import formbody from '@fastify/formbody';
 import multipart from '@fastify/multipart';
+import type { AppConfig } from './config.js';
 import type { AssetRecord, RegisterImageBufferInput, RegisterLocalImageInput, RegisterObjectStorageImageInput } from './repositories/assets.js';
 import type { CreateMessageInput, MessageRecord, MessageStatus } from './repositories/messages.js';
 import { countGraphemes } from './validate.js';
@@ -49,17 +50,36 @@ export interface DashboardRun {
   error: string | null;
 }
 
-async function requireAuth(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-  const userId = request.headers['x-replit-user-id'];
-  if (!userId) {
+function makeRequireAuth(config: Pick<AppConfig, 'dashboard'>) {
+  const credentialsConfigured = Boolean(config.dashboard.user && config.dashboard.password);
+
+  return async function requireAuth(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const userId = request.headers['x-replit-user-id'];
+    if (userId) return;
+
+    if (credentialsConfigured) {
+      const authHeader = request.headers['authorization'] ?? '';
+      if (authHeader.startsWith('Basic ')) {
+        const decoded = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
+        const colon = decoded.indexOf(':');
+        if (colon !== -1) {
+          const user = decoded.slice(0, colon);
+          const password = decoded.slice(colon + 1);
+          if (user === config.dashboard.user && password === config.dashboard.password) return;
+        }
+      }
+      void reply.code(401).header('WWW-Authenticate', 'Basic realm="Dashboard"').send('Unauthorized');
+      return;
+    }
+
     const host = request.headers['host'] ?? '';
     const loginUrl = `https://replit.com/auth_with_repl_site?domain=${host}`;
-    return reply.type('text/html').send(renderLoginPage(loginUrl));
-  }
+    void reply.type('text/html').send(renderLoginPage(loginUrl));
+  };
 }
 
 export async function buildApp(options: {
-  config: unknown;
+  config: Pick<AppConfig, 'dashboard'>;
   repositories: AppRepositories;
 }): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
@@ -70,6 +90,8 @@ export async function buildApp(options: {
       files: 1
     }
   });
+
+  const requireAuth = makeRequireAuth(options.config);
 
   app.get('/healthz', async () => ({ ok: true }));
   app.get('/readyz', async (_request, reply) => {
