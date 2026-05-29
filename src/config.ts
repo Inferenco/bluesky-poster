@@ -2,7 +2,6 @@ export interface AppConfig {
   databaseUrl: string;
   port: number;
   dryRun: boolean;
-  sessionSecret: string;
   dashboard: {
     user: string;
     password: string;
@@ -16,17 +15,14 @@ export interface AppConfig {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const databaseUrl = required(env, 'DATABASE_URL');
-  const dashboardUser = required(env, 'DASHBOARD_ADMIN_USER');
-  const dashboardPassword = required(env, 'DASHBOARD_ADMIN_PASSWORD');
 
   return {
     databaseUrl,
     port: parsePort(env.PORT),
     dryRun: asBoolean(env.DRY_RUN),
-    sessionSecret: env.SESSION_SECRET ?? 'changeme-set-SESSION_SECRET',
     dashboard: {
-      user: dashboardUser,
-      password: dashboardPassword
+      user: env.DASHBOARD_ADMIN_USER ?? '',
+      password: env.DASHBOARD_ADMIN_PASSWORD ?? ''
     },
     bluesky: {
       identifier: env.BSKY_IDENTIFIER ?? env.BSKY_HANDLE ?? null,

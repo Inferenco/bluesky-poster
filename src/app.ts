@@ -1,5 +1,4 @@
-import Fastify, { type FastifyInstance } from 'fastify';
-import basicAuth from '@fastify/basic-auth';
+import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyReply } from 'fastify';
 import formbody from '@fastify/formbody';
 import multipart from '@fastify/multipart';
 import type { AssetRecord, RegisterImageBufferInput, RegisterLocalImageInput } from './repositories/assets.js';
@@ -47,13 +46,17 @@ export interface DashboardRun {
   error: string | null;
 }
 
+async function requireAuth(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const userId = request.headers['x-replit-user-id'];
+  if (!userId) {
+    const host = request.headers['host'] ?? '';
+    const loginUrl = `https://replit.com/auth_with_repl_site?domain=${host}`;
+    return reply.type('text/html').send(renderLoginPage(loginUrl));
+  }
+}
+
 export async function buildApp(options: {
-  config: {
-    dashboard: {
-      user: string;
-      password: string;
-    };
-  };
+  config: Record<string, unknown>;
   repositories: AppRepositories;
 }): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
@@ -63,16 +66,6 @@ export async function buildApp(options: {
       fileSize: 2_000_000,
       files: 1
     }
-  });
-  await app.register(basicAuth, {
-    validate(username, password, _request, _reply, done) {
-      if (username === options.config.dashboard.user && password === options.config.dashboard.password) {
-        done();
-        return;
-      }
-      done(new Error('Unauthorized'));
-    },
-    authenticate: true
   });
 
   app.get('/healthz', async () => ({ ok: true }));
@@ -84,19 +77,19 @@ export async function buildApp(options: {
       return reply.code(503).send({ ok: false });
     }
   });
-  app.get('/', { preHandler: app.basicAuth }, async (_request, reply) => reply.redirect('/messages'));
+  app.get('/', { preHandler: requireAuth }, async (_request, reply) => reply.redirect('/messages'));
 
-  app.get('/messages', { preHandler: app.basicAuth }, async (_request, reply) => {
+  app.get('/messages', { preHandler: requireAuth }, async (_request, reply) => {
     const messages = await options.repositories.messages.list();
     return reply.type('text/html').send(renderPage('Messages', renderMessages(messages)));
   });
 
-  app.get('/messages/new', { preHandler: app.basicAuth }, async (_request, reply) => {
+  app.get('/messages/new', { preHandler: requireAuth }, async (_request, reply) => {
     const assets = await options.repositories.assets.list();
     return reply.type('text/html').send(renderPage('New message', renderMessageForm('/messages', assets)));
   });
 
-  app.post('/messages', { preHandler: app.basicAuth }, async (request, reply) => {
+  app.post('/messages', { preHandler: requireAuth }, async (request, reply) => {
     const body = form(request.body);
     await options.repositories.messages.create({
       body: String(body.body ?? ''),
@@ -111,14 +104,14 @@ export async function buildApp(options: {
     return reply.redirect('/messages');
   });
 
-  app.get<{ Params: { id: string } }>('/messages/:id/edit', { preHandler: app.basicAuth }, async (request, reply) => {
+  app.get<{ Params: { id: string } }>('/messages/:id/edit', { preHandler: requireAuth }, async (request, reply) => {
     const message = await options.repositories.messages.get(request.params.id);
     if (!message) return reply.code(404).send('Message not found');
     const assets = await options.repositories.assets.list();
     return reply.type('text/html').send(renderPage('Edit message', renderMessageForm(`/messages/${message.id}`, assets, message)));
   });
 
-  app.post<{ Params: { id: string } }>('/messages/:id', { preHandler: app.basicAuth }, async (request, reply) => {
+  app.post<{ Params: { id: string } }>('/messages/:id', { preHandler: requireAuth }, async (request, reply) => {
     const body = form(request.body);
     await options.repositories.messages.update(request.params.id, {
       body: String(body.body ?? ''),
@@ -133,23 +126,23 @@ export async function buildApp(options: {
     return reply.redirect('/messages');
   });
 
-  app.post<{ Params: { id: string } }>('/messages/:id/status', { preHandler: app.basicAuth }, async (request, reply) => {
+  app.post<{ Params: { id: string } }>('/messages/:id/status', { preHandler: requireAuth }, async (request, reply) => {
     const body = form(request.body);
     await options.repositories.messages.setStatus(request.params.id, statusFrom(body.status, 'paused'));
     return reply.redirect('/messages');
   });
 
-  app.post<{ Params: { id: string } }>('/messages/:id/delete', { preHandler: app.basicAuth }, async (request, reply) => {
+  app.post<{ Params: { id: string } }>('/messages/:id/delete', { preHandler: requireAuth }, async (request, reply) => {
     await options.repositories.messages.delete(request.params.id);
     return reply.redirect('/messages');
   });
 
-  app.get('/settings', { preHandler: app.basicAuth }, async (_request, reply) => {
+  app.get('/settings', { preHandler: requireAuth }, async (_request, reply) => {
     const settings = await options.repositories.settings.getDashboardSettings();
     return reply.type('text/html').send(renderPage('Settings', renderSettings(settings)));
   });
 
-  app.post('/settings', { preHandler: app.basicAuth }, async (request, reply) => {
+  app.post('/settings', { preHandler: requireAuth }, async (request, reply) => {
     const body = form(request.body);
     const intervals = parseSchedulerIntervals(body.minIntervalMinutes, body.maxIntervalMinutes);
     if (!intervals) {
@@ -164,21 +157,21 @@ export async function buildApp(options: {
     return reply.redirect('/settings');
   });
 
-  app.get('/runs', { preHandler: app.basicAuth }, async (_request, reply) => {
+  app.get('/runs', { preHandler: requireAuth }, async (_request, reply) => {
     const runs = await options.repositories.runs.list();
     return reply.type('text/html').send(renderPage('Runs', renderRuns(runs)));
   });
 
-  app.get('/assets', { preHandler: app.basicAuth }, async (_request, reply) => {
+  app.get('/assets', { preHandler: requireAuth }, async (_request, reply) => {
     const assets = await options.repositories.assets.list();
     return reply.type('text/html').send(renderPage('Assets', renderAssets(assets)));
   });
 
-  app.get('/assets/new', { preHandler: app.basicAuth }, async (_request, reply) => {
+  app.get('/assets/new', { preHandler: requireAuth }, async (_request, reply) => {
     return reply.type('text/html').send(renderPage('New asset', renderAssetForm()));
   });
 
-  app.post('/assets', { preHandler: app.basicAuth }, async (request, reply) => {
+  app.post('/assets', { preHandler: requireAuth }, async (request, reply) => {
     const body = form(request.body);
     await options.repositories.assets.registerLocalImage({
       pathOrObjectKey: String(body.pathOrObjectKey ?? ''),
@@ -187,7 +180,7 @@ export async function buildApp(options: {
     return reply.redirect('/assets');
   });
 
-  app.post('/assets/upload', { preHandler: app.basicAuth }, async (request, reply) => {
+  app.post('/assets/upload', { preHandler: requireAuth }, async (request, reply) => {
     let fileName = '';
     let content: Buffer | null = null;
     let altTextDefault = '';
@@ -255,6 +248,33 @@ function parseSchedulerIntervals(minValue: unknown, maxValue: unknown): { minInt
   if (maxIntervalMinutes < minIntervalMinutes) return null;
 
   return { minIntervalMinutes, maxIntervalMinutes };
+}
+
+function renderLoginPage(loginUrl: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in - Bluesky Poster</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #f6f7f9; font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .card { background: #fff; border: 1px solid #d9dfe7; border-radius: 12px; padding: 48px 40px; width: 100%; max-width: 380px; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,.06); }
+    h1 { font-size: 22px; color: #151922; margin-bottom: 8px; }
+    p { color: #626b7a; font-size: 14px; margin-bottom: 32px; line-height: 1.5; }
+    a.btn { display: inline-block; background: #0070f3; color: #fff; border-radius: 8px; padding: 12px 28px; font-size: 15px; font-weight: 600; text-decoration: none; transition: background .15s; }
+    a.btn:hover { background: #0051c3; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Bluesky Poster</h1>
+    <p>Sign in with your Replit account to access the dashboard.</p>
+    <a class="btn" href="${loginUrl}">Sign in with Replit</a>
+  </div>
+</body>
+</html>`;
 }
 
 function renderPage(title: string, body: string): string {
