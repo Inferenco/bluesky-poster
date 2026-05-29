@@ -3,19 +3,41 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "autopost": "tsx src/index.ts",
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/src/server.js",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "bluesky:check": "tsx src/tools/check-bluesky-session.ts",
+    "bluesky:live-test": "tsx src/tools/live-test-post.ts",
     "preprocess-images": "tsx scripts/preprocess-images.ts",
     "lint": "tsc --noEmit",
     "test": "vitest run",
+    "test:e2e": "vitest run test/e2e",
+    "test:integration": "vitest run test/integration",
     "test:watch": "vitest"
   },
   "dependencies": {
     "@atproto/api": "^0.13.21",
+    "@fastify/basic-auth": "^6.2.0",
+    "@fastify/formbody": "^8.0.2",
+    "@fastify/multipart": "^10.0.0",
+    "@fastify/static": "^9.1.3",
+    "@fastify/view": "^11.1.1",
+    "ejs": "^6.0.1",
+    "fastify": "^5.8.5",
     "image-size": "^2.0.2",
-    "sharp": "^0.33.5"
+    "nanoid": "^5.1.11",
+    "pg": "^8.21.0",
+    "pino": "^10.3.1",
+    "sharp": "^0.33.5",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^20.12.12",
+    "@types/pg": "^8.20.0",
+    "@types/supertest": "^7.2.0",
+    "form-data": "^4.0.5",
+    "supertest": "^7.2.2",
     "tsx": "^4.19.2",
     "typescript": "^5.4.5",
     "vitest": "^4.0.15"

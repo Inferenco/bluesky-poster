@@ -1,92 +1,85 @@
-# Bluesky Autoposter
+# Bluesky Poster Dashboard
 
-Automated Bluesky posting powered by [Nova AI](https://inferenco.com/app.html#docs). Nova generates engaging posts using its built-in knowledge base.
+Private dashboard and worker for posting saved operator-authored messages to Bluesky at randomized intervals.
 
-## How It Works
+The app is now shaped as a Node.js/TypeScript web service:
 
-1. **Random Image** - Selects an image from `assets/images/originals/`
-2. **Nova AI** - Generates post text + hashtags using its knowledge base  
-3. **Publish** - Posts to Bluesky with the image
+- Fastify dashboard for creating, editing, approving, pausing, archiving, and deleting saved messages.
+- Persistent scheduler that stores `next_run_at` in Postgres.
+- Saved-message poster path that records every attempt in `post_runs`.
+- Postgres-backed state and optional Postgres-backed image uploads, suitable for Replit Postgres, local Docker Postgres, or any hosted Postgres exposed through `DATABASE_URL`.
+- GitHub Actions CI only. Production posting no longer runs from GitHub cron and no state is committed back to git.
 
-## Setup
+## Local Development
 
-### 1. Get a Nova API Key
-
-1. Open the [Nova Telegram bot](https://t.me/NovaInferencoBot)
-2. Send `/usersettings` → Click "🔑 API Key" → Create new key
-3. Fund your account with APT, USDC, USDT, or GUI
-
-### 2. Create Bluesky App Password
-
-1. Go to [Bluesky Settings](https://bsky.app/settings/app-passwords)
-2. Create a new app password
-
-### 3. Add Images
-
-Place your images in `assets/images/originals/`. Supported formats: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif` (under 1MB each).
-
-## Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `NOVA_API_KEY` | ✅ | Nova API key |
-| `BSKY_HANDLE` | ✅ | Your Bluesky handle (e.g., `user.bsky.social`) |
-| `BSKY_APP_PASSWORD` | ✅ | Bluesky app password |
-| `DRY_RUN` | ❌ | Set to `true` to test without posting |
-
-## Running Locally
-
-### 1. Install dependencies
+Install dependencies:
 
 ```bash
 npm install
 ```
 
-### 2. Create `.env` file
+Create `.env` from the example and point `DATABASE_URL` at Postgres:
 
 ```bash
-NOVA_API_KEY=nova_your_key_here
-BSKY_HANDLE=yourhandle.bsky.social
-BSKY_APP_PASSWORD=your-app-password
+cp .env.example .env
 ```
 
-### 3. Load env and run
+For local Postgres with Docker:
 
 ```bash
-# Using dotenv
-npx dotenv -e .env -- npm run autopost
-
-# Or export manually
-export $(cat .env | xargs) && npm run autopost
-
-# Dry run (no actual posting)
-export $(cat .env | xargs) && DRY_RUN=true npm run autopost
+docker compose up -d db
+npm run db:migrate
+npm run dev
 ```
 
-## GitHub Actions
+Open the dashboard at `http://localhost:3000/messages` and sign in with `DASHBOARD_ADMIN_USER` / `DASHBOARD_ADMIN_PASSWORD`.
 
-The bot runs automatically via GitHub Actions. Add these secrets to your repository:
+Use `/assets` to register reusable images. For Replit-friendly durability, upload images through the dashboard so the image bytes and default alt text are stored in Postgres. Repo-path assets are also supported for bundled images such as files under `assets/images/originals/`.
 
-- `NOVA_API_KEY`
-- `BSKY_HANDLE`
-- `BSKY_APP_PASSWORD`
+## Required Environment
 
-## Configuration
+| Variable | Required | Description |
+| --- | --- | --- |
+| `DATABASE_URL` | yes | Postgres connection string. Use Replit Postgres' `DATABASE_URL` after import. |
+| `DASHBOARD_ADMIN_USER` | yes | Basic-auth username for the private dashboard. |
+| `DASHBOARD_ADMIN_PASSWORD` | yes | Basic-auth password for the private dashboard. |
+| `BSKY_IDENTIFIER` | for live posting | Bluesky handle or identifier. |
+| `BSKY_APP_PASSWORD` | for live posting | Bluesky app password for the worker. |
+| `DRY_RUN` | no | Set `true` to record dry-run posts without calling Bluesky. |
+| `PORT` | no | Defaults to `3000`. |
 
-Edit `config/schedule.json`:
-
-```json
-{
-  "posts_per_day": 3,
-  "quiet_hours_utc": ["02:00", "08:00"],
-  "random_jitter_minutes": 15
-}
-```
-
-## Development
+## Commands
 
 ```bash
-npm run lint      # TypeScript check
-npm run test      # Run tests
-npm run autopost  # Run the bot
+npm run dev         # start Fastify dashboard + worker loop
+npm run db:migrate  # apply Postgres schema
+npm run bluesky:check # verify Bluesky credentials without creating a post
+npm run bluesky:live-test # create one real Bluesky test post, guarded by CONFIRM_LIVE_POST
+npm run lint        # TypeScript check
+npm run test        # run tests
+npm run build       # compile to dist/
+npm run start       # run compiled server
 ```
+
+## Replit Deployment
+
+Import the GitHub repo into Replit, attach Replit Postgres, and set Secrets for the variables above. The app expects Replit Postgres to provide `DATABASE_URL`; it does not rely on the published filesystem for dashboard or scheduler state.
+
+For production images on Replit, prefer dashboard uploads so image bytes are stored in Postgres. Repo-path assets are best for images committed to the repository.
+
+Use a Reserved VM deployment for the dashboard plus continuous worker. Scheduled Deployments are not the target shape for this app.
+
+The included `.replit` runs:
+
+```bash
+npm ci && npm run build
+npm run db:migrate && npm run start
+```
+
+## Notes
+
+Nova generation remains in the repository as legacy draft-assistance code, but it is not the primary automation path. The worker posts saved dashboard messages.
+
+`npm run bluesky:check` only creates a Bluesky session and prints the authenticated handle/DID. It does not upload blobs or create posts.
+
+`npm run bluesky:live-test` creates a real Bluesky post and refuses to run unless `CONFIRM_LIVE_POST=I_UNDERSTAND_THIS_WILL_POST_TO_BLUESKY` is set. You can override the default timestamped body with `LIVE_TEST_TEXT`.
