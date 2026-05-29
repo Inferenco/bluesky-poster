@@ -56,7 +56,7 @@ async function requireAuth(request: FastifyRequest, reply: FastifyReply): Promis
 }
 
 export async function buildApp(options: {
-  config: Record<string, unknown>;
+  config: unknown;
   repositories: AppRepositories;
 }): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
