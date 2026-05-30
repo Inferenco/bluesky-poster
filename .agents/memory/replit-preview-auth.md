@@ -41,21 +41,27 @@ const loginUrl = `https://replit.com/auth_with_repl_site?domain=${host}`;
 `host` may be the raw internal address (localhost:PORT).
 
 ## Rule 3 — renderLoginPage sign-in button
-The sign-in button must use an onclick JS handler, NOT `target="_top"` on an anchor.
+The sign-in button must use a try/catch onclick handler:
 
 ```html
-<button class="btn" onclick="(window.top||window).location.href='${loginUrl}'">Sign in with Replit</button>
+<button class="btn" onclick="try{window.top.location.href='${loginUrl}'}catch(e){window.open('${loginUrl}')}">Sign in with Replit</button>
 ```
 
 **Why (failure modes for alternatives):**
-1. `window.location.replace(loginUrl)` — navigates the iframe to replit.com, which
-   has `X-Frame-Options: DENY`, showing "refused to connect."
-2. `window.top.location.replace(loginUrl)` — throws a cross-origin `SecurityError`
-   because the workspace top frame is a different origin.
-3. `target="_top"` on an `<a>` — silently blocked by the canvas iframe sandbox
-   (the canvas iframe does not grant `allow-top-navigation`).
-4. `(window.top||window).location.href = url` in an onclick — works because it is
-   a user-gesture-initiated navigation, which bypasses the sandbox restriction.
+1. `window.location.href = loginUrl` — navigates the iframe to replit.com, which has
+   `X-Frame-Options: DENY`; the iframe shows "refused to connect."
+2. `window.top.location.href = loginUrl` (unconditional) — throws `SecurityError`
+   when the canvas/preview iframe is cross-origin from the Replit editor top frame.
+3. `(window.top||window).location.href` — also throws; `||window` fallback never
+   reached because the assignment itself is what throws.
+4. `target="_top"` on an `<a>` — silently blocked by the canvas iframe sandbox
+   (the sandbox does not grant `allow-top-navigation`).
+
+**Correct pattern:**
+- `window.top.location.href` in a try block → works when accessed directly (top frame
+  or same-origin iframe, e.g. deployed app).
+- Catch `SecurityError`, fall back to `window.open(loginUrl)` → opens auth in a new
+  tab when running inside the cross-origin Replit editor canvas.
 
 This pattern has needed re-applying multiple times. Always check all three rules
 when touching `makeRequireAuth` or `renderLoginPage`.
