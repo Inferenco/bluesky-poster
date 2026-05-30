@@ -4,7 +4,7 @@ import { BskyAgent, RichText, type BlobRef } from '@atproto/api';
 import { ImageAsset } from './images.js';
 import type { MessageRecord } from './repositories/messages.js';
 import { getImageMimeType, type BlueskyPublisher } from './services/poster.js';
-import { validatePublicUrl } from './replit_integrations/object_storage.js';
+import { validatePublicUrl, downloadObject } from './replit_integrations/object_storage.js';
 
 export interface BlueskyAuth {
   identifier: string;
@@ -49,9 +49,11 @@ export class AtprotoBlueskyPublisher implements BlueskyPublisher {
       tags: message.tags.slice(0, 8)
     };
 
-    if (message.image_path || message.image_content || message.image_public_url) {
+    if (message.image_path || message.image_content || message.image_public_url || message.image_object_key) {
       let data: Buffer;
-      if (message.image_public_url) {
+      if (message.image_object_key) {
+        data = await downloadObject(message.image_object_key);
+      } else if (message.image_public_url) {
         validatePublicUrl(message.image_public_url);
         const resp = await fetch(message.image_public_url);
         if (!resp.ok) throw new Error(`Failed to fetch image from object storage: ${resp.status}`);

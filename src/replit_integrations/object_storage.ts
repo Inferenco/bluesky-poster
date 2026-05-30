@@ -76,6 +76,35 @@ export async function uploadBuffer(
   return { objectKey, publicUrl };
 }
 
+export async function downloadObject(objectKey: string): Promise<Buffer> {
+  const { bucketName } = getPublicBucketInfo();
+
+  const signResponse = await fetch(`${REPLIT_SIDECAR_ENDPOINT}/object-storage/signed-object-url`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      bucket_name: bucketName,
+      object_name: objectKey,
+      method: 'GET',
+      expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    }),
+  });
+
+  if (!signResponse.ok) {
+    const body = await signResponse.text();
+    throw new Error(`Failed to generate presigned download URL: ${signResponse.status} ${body}`);
+  }
+
+  const { signed_url } = await signResponse.json() as { signed_url: string };
+
+  const fetchResponse = await fetch(signed_url);
+  if (!fetchResponse.ok) {
+    throw new Error(`Failed to fetch image from object storage: ${fetchResponse.status}`);
+  }
+
+  return Buffer.from(await fetchResponse.arrayBuffer());
+}
+
 async function createPresignedUpload(fileName: string): Promise<PresignedUploadResult> {
   const { bucketName, prefix } = getPublicBucketInfo();
   const ext = path.extname(fileName).toLowerCase() || '';

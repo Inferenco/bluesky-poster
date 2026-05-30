@@ -23,6 +23,7 @@ export interface MessageRecord {
   image_width?: number | null;
   image_height?: number | null;
   image_public_url?: string | null;
+  image_object_key?: string | null;
   normalised_hash: string;
   last_posted_at: Date | string | null;
   post_count: number;
@@ -103,7 +104,10 @@ export class MessagesRepository {
         a.mime_type as image_mime_type,
         a.width as image_width,
         a.height as image_height,
-        a.public_url as image_public_url
+        a.public_url as image_public_url,
+        case when a.storage_kind = 'object_storage' then a.path_or_object_key
+             else null
+        end as image_object_key
       from messages m
       left join assets a on a.id = m.image_asset_id
       where m.status <> $1
@@ -127,7 +131,10 @@ export class MessagesRepository {
         a.mime_type as image_mime_type,
         a.width as image_width,
         a.height as image_height,
-        a.public_url as image_public_url
+        a.public_url as image_public_url,
+        case when a.storage_kind = 'object_storage' then a.path_or_object_key
+             else null
+        end as image_object_key
       from messages m
       left join assets a on a.id = m.image_asset_id
       where m.id = $1`,
