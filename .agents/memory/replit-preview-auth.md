@@ -29,21 +29,33 @@ if (credentialsConfigured) {
 **Why:** The preview pane is an iframe. `WWW-Authenticate: Basic` triggers the
 browser's native credential dialog, which never appears inside an iframe.
 
-## Rule 2 — renderLoginPage
-`renderLoginPage` must NOT use `window.location.replace(loginUrl)` (inline script).
-The sign-in button must use `target="_top"` on the anchor tag.
+## Rule 2 — renderLoginPage host detection
+Use `x-forwarded-host` (falling back to `host`) when building the `loginUrl`:
 
-```html
-<a class="btn" href="${loginUrl}" target="_top">Sign in with Replit</a>
+```ts
+const host = (request.headers['x-forwarded-host'] as string | undefined) ?? request.headers['host'] ?? '';
+const loginUrl = `https://replit.com/auth_with_repl_site?domain=${host}`;
 ```
 
-**Why (two failure modes):**
-1. `window.location.replace(loginUrl)` navigates the iframe itself to replit.com,
-   which sets `X-Frame-Options: DENY` and shows "refused to connect."
-2. `window.top.location.replace(loginUrl)` throws a cross-origin `SecurityError`
-   because the Replit workspace top frame is a different origin.
-3. `target="_top"` is pure HTML, avoids JS cross-origin restrictions, and correctly
-   navigates the entire browser tab to the auth URL.
+**Why:** Behind the Replit proxy the public domain arrives in `x-forwarded-host`;
+`host` may be the raw internal address (localhost:PORT).
 
-This pattern has needed re-applying multiple times. Always check both rules when
-touching `makeRequireAuth` or `renderLoginPage`.
+## Rule 3 — renderLoginPage sign-in button
+The sign-in button must use an onclick JS handler, NOT `target="_top"` on an anchor.
+
+```html
+<button class="btn" onclick="(window.top||window).location.href='${loginUrl}'">Sign in with Replit</button>
+```
+
+**Why (failure modes for alternatives):**
+1. `window.location.replace(loginUrl)` — navigates the iframe to replit.com, which
+   has `X-Frame-Options: DENY`, showing "refused to connect."
+2. `window.top.location.replace(loginUrl)` — throws a cross-origin `SecurityError`
+   because the workspace top frame is a different origin.
+3. `target="_top"` on an `<a>` — silently blocked by the canvas iframe sandbox
+   (the canvas iframe does not grant `allow-top-navigation`).
+4. `(window.top||window).location.href = url` in an onclick — works because it is
+   a user-gesture-initiated navigation, which bypasses the sandbox restriction.
+
+This pattern has needed re-applying multiple times. Always check all three rules
+when touching `makeRequireAuth` or `renderLoginPage`.

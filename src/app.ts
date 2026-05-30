@@ -73,7 +73,7 @@ function makeRequireAuth(config: Pick<AppConfig, 'dashboard'>) {
       }
     }
 
-    const host = request.headers['host'] ?? '';
+    const host = (request.headers['x-forwarded-host'] as string | undefined) ?? request.headers['host'] ?? '';
     const loginUrl = `https://replit.com/auth_with_repl_site?domain=${host}`;
     void reply.type('text/html').send(renderLoginPage(loginUrl));
   };
@@ -347,15 +347,15 @@ function renderLoginPage(loginUrl: string): string {
     .card { background: #fff; border: none; border-radius: 14px; padding: 48px 40px; width: 100%; max-width: 380px; text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,.07), 0 8px 32px rgba(0,0,0,.08); }
     h1 { font-size: 22px; font-weight: 700; color: #151922; margin-bottom: 8px; letter-spacing: -.01em; }
     p { color: #626b7a; font-size: 14px; margin-bottom: 32px; line-height: 1.5; }
-    a.btn { display: inline-block; background: linear-gradient(135deg, #00b4ff, #1463ff); color: #fff; border-radius: 999px; padding: 12px 28px; font-size: 15px; font-weight: 600; text-decoration: none; transition: opacity .15s; }
-    a.btn:hover { opacity: .88; }
+    .btn { display: inline-block; background: linear-gradient(135deg, #00b4ff, #1463ff); color: #fff; border: none; border-radius: 999px; padding: 12px 28px; font-size: 15px; font-weight: 600; text-decoration: none; cursor: pointer; transition: opacity .15s; font-family: inherit; }
+    .btn:hover { opacity: .88; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>Bluesky Poster</h1>
     <p>Sign in with your Replit account to access the dashboard.</p>
-    <a class="btn" href="${loginUrl}" target="_top">Sign in with Replit</a>
+    <button class="btn" onclick="(window.top||window).location.href='${loginUrl}'">Sign in with Replit</button>
   </div>
 </body>
 </html>`;
