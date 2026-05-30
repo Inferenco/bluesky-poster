@@ -69,9 +69,14 @@ async function main(): Promise<void> {
 async function schedulerLoop(scheduler: SchedulerService): Promise<void> {
   while (true) {
     try {
-      await scheduler.runOnce();
+      const result = await scheduler.runOnce();
+      if (result.status === 'posted') {
+        console.log(`[scheduler] posted message ${result.messageId}`);
+      } else if (result.status === 'skipped' && result.reason !== 'not_due') {
+        console.log(`[scheduler] skipped — ${result.reason}`);
+      }
     } catch (err) {
-      console.error(err);
+      console.error('[scheduler] error:', err instanceof Error ? err.message : err);
     }
     await sleep(SCHEDULER_POLL_MS);
   }
