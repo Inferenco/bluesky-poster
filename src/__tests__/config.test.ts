@@ -2,10 +2,11 @@ import { describe, expect, test } from 'vitest';
 import { loadConfig } from '../config.js';
 
 describe('loadConfig', () => {
-  test('requires DATABASE_URL and dashboard credentials', () => {
+  test('requires DATABASE_URL and allows Replit auth without dashboard credentials', () => {
     expect(() => loadConfig({})).toThrow('DATABASE_URL is required');
-    expect(() => loadConfig({ DATABASE_URL: 'postgres://local' })).toThrow('DASHBOARD_ADMIN_USER is required');
-    expect(() => loadConfig({ DATABASE_URL: 'postgres://local', DASHBOARD_ADMIN_USER: 'admin' })).toThrow('DASHBOARD_ADMIN_PASSWORD is required');
+    const config = loadConfig({ DATABASE_URL: 'postgres://local' });
+    expect(config.dashboard.user).toBeNull();
+    expect(config.dashboard.password).toBeNull();
   });
 
   test('loads Replit-compatible database URL and runtime defaults', () => {

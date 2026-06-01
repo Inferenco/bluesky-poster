@@ -12,7 +12,10 @@ vi.mock('../replit_integrations/object_storage.js', () => ({
   })
 }));
 
-const auth = `Basic ${Buffer.from('admin:secret').toString('base64')}`;
+const authHeaders = {
+  'x-replit-user-id': 'user-1',
+  'x-replit-user-name': 'admin'
+};
 
 function makeMessage(overrides: Partial<MessageRecord> = {}): MessageRecord {
   return {
@@ -167,7 +170,7 @@ describe('dashboard routes', () => {
     await app.close();
   });
 
-  test('requires authentication for dashboard pages', async () => {
+  test('requires Replit authentication for dashboard pages', async () => {
     const app = await buildApp({
       config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
       repositories: repositories()
@@ -175,11 +178,13 @@ describe('dashboard routes', () => {
 
     const response = await app.inject({ method: 'GET', url: '/messages' });
 
-    expect(response.statusCode).toBe(401);
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain('Sign in with your Replit account');
+    expect(response.body).toContain('Inferenco Poster');
     await app.close();
   });
 
-  test('creates, edits, and pauses a message', async () => {
+  test('creates, edits, pauses, and renders branded messages', async () => {
     const repos = repositories();
     const app = await buildApp({
       config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
@@ -189,15 +194,15 @@ describe('dashboard routes', () => {
     const created = await app.inject({
       method: 'POST',
       url: '/messages',
-      headers: { authorization: auth, 'content-type': 'application/x-www-form-urlencoded' },
-      payload: 'body=First%20message&status=approved&weight=250&cooldownHours=12&tags=launch,updates&imagePath=assets/post.jpg&imageAlt=Launch%20image'
+      headers: { ...authHeaders, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: 'body=First%20message&status=approved&weight=250&cooldownHours=12&tags=launch,updates&imageAlt=Launch%20image'
     });
     expect(created.statusCode).toBe(302);
 
     const edited = await app.inject({
       method: 'POST',
       url: '/messages/msg-1',
-      headers: { authorization: auth, 'content-type': 'application/x-www-form-urlencoded' },
+      headers: { ...authHeaders, 'content-type': 'application/x-www-form-urlencoded' },
       payload: 'body=Edited%20message&weight=150&cooldownHours=24&tags=edited'
     });
     expect(edited.statusCode).toBe(302);
@@ -205,12 +210,13 @@ describe('dashboard routes', () => {
     const paused = await app.inject({
       method: 'POST',
       url: '/messages/msg-1/status',
-      headers: { authorization: auth, 'content-type': 'application/x-www-form-urlencoded' },
+      headers: { ...authHeaders, 'content-type': 'application/x-www-form-urlencoded' },
       payload: 'status=paused'
     });
     expect(paused.statusCode).toBe(302);
 
-    const list = await app.inject({ method: 'GET', url: '/messages', headers: { authorization: auth } });
+    const list = await app.inject({ method: 'GET', url: '/messages', headers: authHeaders });
+    expect(list.body).toContain('Inferenco Poster');
     expect(list.body).toContain('Edited message');
     expect(list.body).toContain('paused');
     expect(list.body).toContain('150');
@@ -227,17 +233,22 @@ describe('dashboard routes', () => {
     const created = await app.inject({
       method: 'POST',
       url: '/assets',
-      headers: { authorization: auth, 'content-type': 'application/x-www-form-urlencoded' },
+      headers: { ...authHeaders, 'content-type': 'application/x-www-form-urlencoded' },
       payload: 'pathOrObjectKey=assets%2Fimages%2Foriginals%2FNova1.jpg&altTextDefault=Nova%20portrait'
     });
 
     expect(created.statusCode).toBe(302);
-    const assets = await app.inject({ method: 'GET', url: '/assets', headers: { authorization: auth } });
+    const assets = await app.inject({ method: 'GET', url: '/assets', headers: authHeaders });
     expect(assets.body).toContain('Nova portrait');
 
-    const form = await app.inject({ method: 'GET', url: '/messages/new', headers: { authorization: auth } });
+    const form = await app.inject({ method: 'GET', url: '/messages/new', headers: authHeaders });
     expect(form.body).toContain('asset-1');
     expect(form.body).toContain('Nova portrait');
+    expect(form.body).not.toContain('name="imagePath"');
+
+    const assetForm = await app.inject({ method: 'GET', url: '/assets/new', headers: authHeaders });
+    expect(assetForm.body).toContain('/assets/upload-multipart');
+    expect(assetForm.body).not.toContain('Register local file path');
 
     await app.close();
   });
@@ -251,12 +262,12 @@ describe('dashboard routes', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/settings',
-      headers: { authorization: auth, 'content-type': 'application/x-www-form-urlencoded' },
+      headers: { ...authHeaders, 'content-type': 'application/x-www-form-urlencoded' },
       payload: 'enabled=on&minIntervalMinutes=30&maxIntervalMinutes=90'
     });
 
     expect(response.statusCode).toBe(302);
-    const settings = await app.inject({ method: 'GET', url: '/settings', headers: { authorization: auth } });
+    const settings = await app.inject({ method: 'GET', url: '/settings', headers: authHeaders });
     expect(settings.body).toContain('value="30"');
     expect(settings.body).toContain('value="90"');
     await app.close();
@@ -284,7 +295,7 @@ describe('dashboard routes', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/settings',
-      headers: { authorization: auth, 'content-type': 'application/x-www-form-urlencoded' },
+      headers: { ...authHeaders, 'content-type': 'application/x-www-form-urlencoded' },
       payload
     });
 
@@ -304,7 +315,7 @@ describe('dashboard routes', () => {
     const createdAsset = await app.inject({
       method: 'POST',
       url: '/assets',
-      headers: { authorization: auth, 'content-type': 'application/x-www-form-urlencoded' },
+      headers: { ...authHeaders, 'content-type': 'application/x-www-form-urlencoded' },
       payload: 'pathOrObjectKey=assets%2Fimages%2Ftest.jpg&altTextDefault=Test+image'
     });
     expect(createdAsset.statusCode).toBe(302);
@@ -312,14 +323,14 @@ describe('dashboard routes', () => {
     await app.inject({
       method: 'POST',
       url: '/messages',
-      headers: { authorization: auth, 'content-type': 'application/x-www-form-urlencoded' },
+      headers: { ...authHeaders, 'content-type': 'application/x-www-form-urlencoded' },
       payload: 'body=Post+with+asset&status=draft&weight=100&cooldownHours=168&imageAssetId=asset-1'
     });
 
     const deleteResponse = await app.inject({
       method: 'POST',
       url: '/assets/asset-1/delete',
-      headers: { authorization: auth }
+      headers: authHeaders
     });
 
     expect(deleteResponse.statusCode).toBe(302);
@@ -328,7 +339,7 @@ describe('dashboard routes', () => {
     expect(decodeURIComponent(location)).toContain('Cannot delete');
     expect(decodeURIComponent(location)).toContain('1 message is still using this asset');
 
-    const assetList = await app.inject({ method: 'GET', url: '/assets', headers: { authorization: auth } });
+    const assetList = await app.inject({ method: 'GET', url: '/assets', headers: authHeaders });
     expect(assetList.body).toContain('Test image');
 
     await app.close();
@@ -344,24 +355,24 @@ describe('dashboard routes', () => {
     const createdAsset = await app.inject({
       method: 'POST',
       url: '/assets',
-      headers: { authorization: auth, 'content-type': 'application/x-www-form-urlencoded' },
+      headers: { ...authHeaders, 'content-type': 'application/x-www-form-urlencoded' },
       payload: 'pathOrObjectKey=assets%2Fimages%2Funused.jpg&altTextDefault=Unused+image'
     });
     expect(createdAsset.statusCode).toBe(302);
 
-    const assetsBefore = await app.inject({ method: 'GET', url: '/assets', headers: { authorization: auth } });
+    const assetsBefore = await app.inject({ method: 'GET', url: '/assets', headers: authHeaders });
     expect(assetsBefore.body).toContain('Unused image');
 
     const deleteResponse = await app.inject({
       method: 'POST',
       url: '/assets/asset-1/delete',
-      headers: { authorization: auth }
+      headers: authHeaders
     });
 
     expect(deleteResponse.statusCode).toBe(302);
     expect(deleteResponse.headers['location']).toBe('/assets');
 
-    const assetsAfter = await app.inject({ method: 'GET', url: '/assets', headers: { authorization: auth } });
+    const assetsAfter = await app.inject({ method: 'GET', url: '/assets', headers: authHeaders });
     expect(assetsAfter.body).not.toContain('Unused image');
 
     await app.close();
@@ -397,7 +408,7 @@ describe('dashboard routes', () => {
       const response = await app.inject({
         method: 'POST',
         url: '/assets/upload-multipart',
-        headers: { authorization: auth, ...form.getHeaders() },
+        headers: { ...authHeaders, ...form.getHeaders() },
         payload: form.getBuffer()
       });
 
@@ -425,7 +436,7 @@ describe('dashboard routes', () => {
       const response = await app.inject({
         method: 'POST',
         url: '/assets/upload-multipart',
-        headers: { authorization: auth, ...form.getHeaders() },
+        headers: { ...authHeaders, ...form.getHeaders() },
         payload: form.getBuffer()
       });
 
@@ -448,7 +459,7 @@ describe('dashboard routes', () => {
       const response = await app.inject({
         method: 'POST',
         url: '/assets/upload-multipart',
-        headers: { authorization: auth, ...form.getHeaders() },
+        headers: { ...authHeaders, ...form.getHeaders() },
         payload: form.getBuffer()
       });
 
@@ -474,7 +485,7 @@ describe('dashboard routes', () => {
       const response = await app.inject({
         method: 'POST',
         url: '/assets/upload-multipart',
-        headers: { authorization: auth, ...form.getHeaders() },
+        headers: { ...authHeaders, ...form.getHeaders() },
         payload: form.getBuffer()
       });
 
@@ -498,7 +509,7 @@ describe('dashboard routes', () => {
       const response = await app.inject({
         method: 'POST',
         url: '/assets/upload-multipart',
-        headers: { authorization: auth, ...form.getHeaders() },
+        headers: { ...authHeaders, ...form.getHeaders() },
         payload: form.getBuffer()
       });
 
