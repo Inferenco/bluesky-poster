@@ -6,9 +6,10 @@ modules = ["nodejs-20", "python-3.11", "postgresql-16"]
 requiredFiles = [".replit", "replit.nix", "package.json"]
 
 [deployment]
-build = "npm ci && npm run build"
-run = "npm run db:migrate && npm run start"
+build = ["npm", "run", "build"]
+run = ["node", "dist/server.js"]
 ignorePorts = false
+deploymentTarget = "vm"
 
 [[ports]]
 localPort = 3000
