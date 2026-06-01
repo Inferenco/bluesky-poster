@@ -132,7 +132,7 @@ export async function buildApp(options: {
       status: statusFrom(body.status, 'draft'),
       weight: positiveInteger(body.weight, 100),
       cooldownHours: positiveInteger(body.cooldownHours, 168),
-      tags: listFromCsv(body.tags),
+      tags: normalizeTags(body.tags),
       imageAssetId: optionalString(body.imageAssetId),
       imagePath: optionalString(body.imagePath),
       imageAlt: optionalString(body.imageAlt)
@@ -160,7 +160,7 @@ export async function buildApp(options: {
       status: statusFrom(body.status, 'draft'),
       weight: positiveInteger(body.weight, 100),
       cooldownHours: positiveInteger(body.cooldownHours, 168),
-      tags: listFromCsv(body.tags),
+      tags: normalizeTags(body.tags),
       imageAssetId: optionalString(body.imageAssetId),
       imagePath: optionalString(body.imagePath),
       imageAlt: optionalString(body.imageAlt)
@@ -331,6 +331,10 @@ function listFromCsv(value: unknown): string[] {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function normalizeTags(value: unknown): string[] {
+  return listFromCsv(value).map((t) => t.replace(/^#+/, ''));
 }
 
 function parseSchedulerIntervals(minValue: unknown, maxValue: unknown): { minIntervalMinutes: number; maxIntervalMinutes: number } | null {
@@ -524,7 +528,7 @@ function renderMessageForm(action: string, assets: AssetRecord[], message?: Mess
     </select></label>
     <label>Weight <input name="weight" type="number" min="1" value="${message?.weight ?? 100}"></label>
     <label>Cooldown hours <input name="cooldownHours" type="number" min="1" value="${message?.cooldown_hours ?? 168}"></label>
-    <label>Tags <input name="tags" value="${escapeHtml(message?.tags.join(', ') ?? '')}"></label>
+    <label>Tags <input name="tags" value="${escapeHtml(message?.tags.join(', ') ?? '')}" placeholder="travel, photography"><small>Comma-separated words (no # needed). Appended as hashtags at the end of the post.</small></label>
     <label class="full">Registered asset <select name="imageAssetId">${assetOptions}</select>${assetRefNote}</label>
     <label class="full">Image path <input name="imagePath" value="${escapeHtml(message?.image_path ?? '')}"></label>
     <label class="full">Image alt text <input name="imageAlt" value="${escapeHtml(message?.image_alt ?? '')}"></label>

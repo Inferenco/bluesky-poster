@@ -38,7 +38,11 @@ export class AtprotoBlueskyPublisher implements BlueskyPublisher {
   constructor(private readonly agent: BskyAgent) {}
 
   async publish(message: MessageRecord): Promise<{ uri: string | null; cid: string | null }> {
-    const rt = new RichText({ text: message.body });
+    const tags = message.tags.slice(0, 8).filter(Boolean);
+    const tagSuffix = tags.length > 0 ? '\n\n' + tags.map((t) => `#${t}`).join(' ') : '';
+    const fullText = message.body + tagSuffix;
+
+    const rt = new RichText({ text: fullText });
     await rt.detectFacets(this.agent);
 
     const record: Record<string, unknown> = {
@@ -46,7 +50,7 @@ export class AtprotoBlueskyPublisher implements BlueskyPublisher {
       text: rt.text,
       facets: rt.facets,
       createdAt: new Date().toISOString(),
-      tags: message.tags.slice(0, 8)
+      ...(tags.length > 0 ? { tags } : {})
     };
 
     if (message.image_path || message.image_content || message.image_public_url || message.image_object_key) {
