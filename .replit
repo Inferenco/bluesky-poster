@@ -27,6 +27,7 @@ channel = "stable-25_05"
 PORT = "5000"
 DRY_RUN = "false"
 BSKY_SERVICE_URL = "https://bsky.social"
+DASHBOARD_ALLOWED_REPLIT_USERS = "cryptoautistic8"
 
 [agent]
 expertMode = true
