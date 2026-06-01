@@ -28,6 +28,7 @@ Open the preview and sign in with the credentials stored in `DASHBOARD_ADMIN_USE
 | `DATABASE_URL` | yes | Postgres connection string (provided by Replit) |
 | `DASHBOARD_ADMIN_USER` | yes | Basic-auth username |
 | `DASHBOARD_ADMIN_PASSWORD` | yes | Basic-auth password |
+| `DASHBOARD_ALLOWED_REPLIT_USERS` | no | Comma-separated Replit usernames allowed to access the dashboard via Replit auth (e.g. `alice,bob`). If unset, all authenticated Replit users are allowed. |
 | `BSKY_IDENTIFIER` | for live posting | Bluesky handle |
 | `BSKY_APP_PASSWORD` | for live posting | Bluesky app password |
 | `DRY_RUN` | no | `true` = log posts without calling Bluesky (default in dev) |

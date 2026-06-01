@@ -53,10 +53,20 @@ export interface DashboardRun {
 
 function makeRequireAuth(config: Pick<AppConfig, 'dashboard'>) {
   const credentialsConfigured = Boolean(config.dashboard.user && config.dashboard.password);
+  const allowedReplitUsers = config.dashboard.allowedReplitUsers;
 
   return async function requireAuth(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const userId = request.headers['x-replit-user-id'];
-    if (userId) return;
+    if (userId) {
+      if (allowedReplitUsers.length > 0) {
+        const userName = String(request.headers['x-replit-user-name'] ?? '').toLowerCase();
+        if (!allowedReplitUsers.includes(userName)) {
+          void reply.code(403).type('text/html').send(renderForbiddenPage());
+          return;
+        }
+      }
+      return;
+    }
 
     if (credentialsConfigured) {
       const authHeader = request.headers['authorization'] ?? '';
@@ -332,6 +342,30 @@ function parseSchedulerIntervals(minValue: unknown, maxValue: unknown): { minInt
   if (maxIntervalMinutes < minIntervalMinutes) return null;
 
   return { minIntervalMinutes, maxIntervalMinutes };
+}
+
+function renderForbiddenPage(): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Access denied - Bluesky Poster</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #eef2f8; font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .card { background: #fff; border: none; border-radius: 14px; padding: 48px 40px; width: 100%; max-width: 380px; text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,.07), 0 8px 32px rgba(0,0,0,.08); }
+    h1 { font-size: 22px; font-weight: 700; color: #151922; margin-bottom: 8px; letter-spacing: -.01em; }
+    p { color: #626b7a; font-size: 14px; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Access denied</h1>
+    <p>Your Replit account does not have permission to access this dashboard.</p>
+  </div>
+</body>
+</html>`;
 }
 
 function renderLoginPage(loginUrl: string): string {

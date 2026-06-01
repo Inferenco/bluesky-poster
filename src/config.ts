@@ -5,6 +5,7 @@ export interface AppConfig {
   dashboard: {
     user: string;
     password: string;
+    allowedReplitUsers: string[];
   };
   bluesky: {
     identifier: string | null;
@@ -22,7 +23,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     dryRun: asBoolean(env.DRY_RUN),
     dashboard: {
       user: required(env, 'DASHBOARD_ADMIN_USER'),
-      password: required(env, 'DASHBOARD_ADMIN_PASSWORD')
+      password: required(env, 'DASHBOARD_ADMIN_PASSWORD'),
+      allowedReplitUsers: parseStringList(env.DASHBOARD_ALLOWED_REPLIT_USERS)
     },
     bluesky: {
       identifier: env.BSKY_IDENTIFIER ?? env.BSKY_HANDLE ?? null,
@@ -51,4 +53,9 @@ function parsePort(raw: string | undefined): number {
 
 function asBoolean(raw: string | undefined): boolean {
   return ['1', 'true', 'yes', 'on'].includes(String(raw ?? '').toLowerCase());
+}
+
+function parseStringList(raw: string | undefined): string[] {
+  if (!raw?.trim()) return [];
+  return raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 }
