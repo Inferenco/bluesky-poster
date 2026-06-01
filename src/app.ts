@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyReply } from 'fastify';
 import formbody from '@fastify/formbody';
 import multipart from '@fastify/multipart';
@@ -8,7 +10,7 @@ import type { AppConfig } from './config.js';
 import type { AssetRecord, RegisterLocalImageInput, RegisterObjectStorageImageInput } from './repositories/assets.js';
 import type { CreateMessageInput, MessageRecord, MessageStatus } from './repositories/messages.js';
 import { countGraphemes } from './validate.js';
-import { uploadBuffer } from './replit_integrations/object_storage.js';
+import { downloadObject, uploadBuffer } from './replit_integrations/object_storage.js';
 import {
   buildLoginUrl,
   buildLogoutUrl,
@@ -33,6 +35,7 @@ export interface AppRepositories {
   };
   assets: {
     list(): Promise<AssetRecord[]>;
+    get(id: string): Promise<AssetRecord | null>;
     registerLocalImage(input: RegisterLocalImageInput): Promise<AssetRecord>;
     registerObjectStorageImage(input: RegisterObjectStorageImageInput): Promise<AssetRecord>;
     delete(id: string): Promise<void>;
@@ -291,6 +294,23 @@ export async function buildApp(options: {
     return reply.type('text/html').send(renderPage('New asset', 'assets', renderAssetForm()));
   });
 
+  app.get<{ Params: { id: string } }>('/assets/:id/preview', { preHandler: requireAuth }, async (request, reply) => {
+    const asset = await options.repositories.assets.get(request.params.id);
+    if (!asset) return reply.code(404).send('Asset not found');
+
+    try {
+      const buffer = await readAssetPreview(asset);
+      if (!buffer) return reply.code(404).send('Asset preview not available');
+      return reply
+        .header('cache-control', 'private, max-age=300')
+        .type(asset.mime_type)
+        .send(buffer);
+    } catch (err) {
+      request.log.warn({ err, assetId: asset.id }, 'Asset preview failed');
+      return reply.code(404).send('Asset preview not available');
+    }
+  });
+
   app.post('/assets', { preHandler: requireAuth }, async (request, reply) => {
     const body = form(request.body);
     await options.repositories.assets.registerLocalImage({
@@ -429,6 +449,62 @@ function parseSchedulerIntervals(minValue: unknown, maxValue: unknown): { minInt
   return { minIntervalMinutes, maxIntervalMinutes };
 }
 
+async function readAssetPreview(asset: AssetRecord): Promise<Buffer | null> {
+  if (asset.storage_kind === 'object_storage') {
+    const objectKey = objectKeyFromAsset(asset);
+    if (objectKey) {
+      try {
+        return await downloadObject(objectKey);
+      } catch (err) {
+        if (!asset.public_url) throw err;
+      }
+    }
+    if (asset.public_url) {
+      return downloadPublicStorageUrl(asset.public_url);
+    }
+    return null;
+  }
+
+  if (asset.content) {
+    return asset.content;
+  }
+
+  if (asset.path_or_object_key) {
+    return readFile(path.resolve(process.cwd(), asset.path_or_object_key));
+  }
+
+  return null;
+}
+
+function objectKeyFromAsset(asset: AssetRecord): string | null {
+  const storedKey = asset.path_or_object_key?.trim();
+  if (storedKey) {
+    return storedKey.startsWith('https://') ? objectKeyFromPublicUrl(storedKey) : storedKey;
+  }
+  return objectKeyFromPublicUrl(asset.public_url);
+}
+
+function objectKeyFromPublicUrl(publicUrl: string | null): string | null {
+  if (!publicUrl) return null;
+  try {
+    const url = new URL(publicUrl);
+    if (url.protocol !== 'https:' || url.hostname !== 'storage.googleapis.com') return null;
+    const [, ...keyParts] = url.pathname.replace(/^\/+/, '').split('/');
+    const objectKey = keyParts.join('/');
+    return objectKey ? decodeURIComponent(objectKey) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function downloadPublicStorageUrl(publicUrl: string): Promise<Buffer | null> {
+  const url = new URL(publicUrl);
+  if (url.protocol !== 'https:' || url.hostname !== 'storage.googleapis.com') return null;
+  const response = await fetch(url);
+  if (!response.ok) return null;
+  return Buffer.from(await response.arrayBuffer());
+}
+
 type NavSection = 'messages' | 'assets' | 'settings' | 'runs';
 
 type IconName =
@@ -561,8 +637,15 @@ function renderPage(title: string, active: NavSection, body: string): string {
     .empty { border: 1px dashed rgba(68, 103, 154, .48); border-radius: 8px; padding: 30px; color: var(--muted); background: rgba(7, 8, 18, .28); }
     .banner { border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; font-size: 14px; font-weight: 650; }
     .banner.error { border: 1px solid rgba(255, 77, 94, .42); color: var(--danger); background: rgba(255, 77, 94, .10); }
-    .thumb { width: 48px; height: 48px; object-fit: cover; border: 1px solid rgba(68, 103, 154, .42); border-radius: 8px; display: block; }
-    .location-link { word-break: break-all; }
+    .asset-preview-cell { width: 72px; }
+    .thumb-frame { position: relative; display: grid; place-items: center; width: 50px; height: 50px; overflow: hidden; border: 1px solid rgba(68, 103, 154, .46); border-radius: 8px; background: linear-gradient(135deg, rgba(18, 215, 255, .16), rgba(20, 120, 255, .08)); }
+      .thumb { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .thumb[hidden] { display: none; }
+      .thumb-placeholder { display: none; place-items: center; width: 100%; height: 100%; color: var(--cyan); opacity: .72; }
+      .thumb-frame.preview-error .thumb-placeholder { display: grid; }
+      .thumb-placeholder svg { width: 18px; height: 18px; }
+    .location-cell { max-width: 560px; }
+    .location-link { display: block; max-width: min(58vw, 700px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .muted { color: var(--muted); }
     @media (max-width: 900px) {
       .shell { grid-template-columns: 1fr; }
@@ -673,17 +756,14 @@ function renderAssets(assets: AssetRecord[], errorMsg?: string | null): string {
     ? `<div class="banner error">${escapeHtml(errorMsg)}</div>`
     : '';
   const rows = assets.map((asset) => {
-    const thumbnail = asset.storage_kind === 'object_storage' && asset.public_url
-      ? `<img class="thumb" src="${escapeHtml(asset.public_url)}" alt="${escapeHtml(asset.alt_text_default)}">`
-      : '';
     const locationCell = asset.storage_kind === 'object_storage' && asset.public_url
       ? `<a class="location-link" href="${escapeHtml(asset.public_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(asset.public_url)}</a>`
       : escapeHtml(asset.path_or_object_key ?? 'Postgres bytea');
     return `<tr>
-      <td>${thumbnail}</td>
+      <td class="asset-preview-cell">${renderAssetThumbnail(asset)}</td>
       <td>${escapeHtml(asset.alt_text_default)}</td>
       <td>${renderBadge(storageKindLabel(asset.storage_kind), asset.storage_kind)}</td>
-      <td>${locationCell}</td>
+      <td class="location-cell">${locationCell}</td>
       <td>${escapeHtml(asset.mime_type)}</td>
       <td class="numeric">${asset.width}x${asset.height}</td>
       <td class="numeric">${asset.bytes}</td>
@@ -695,6 +775,15 @@ function renderAssets(assets: AssetRecord[], errorMsg?: string | null): string {
     <div class="page-head"><div><h2>Assets</h2><p>Manage reusable images with default alt text before attaching them to saved messages.</p></div><a class="button primary" href="/assets/new">${icon('plus')}<span>New asset</span></a></div>
     <div class="section-body">${errorBanner}${rows ? `<div class="table-wrap"><table><thead><tr><th></th><th>Alt text</th><th>Storage</th><th>Location</th><th>MIME</th><th>Size</th><th>Bytes</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No image assets registered yet.</div>'}</div>
   </section>`;
+}
+
+function renderAssetThumbnail(asset: AssetRecord): string {
+  const hasPreview = Boolean(asset.path_or_object_key || asset.public_url || asset.content);
+  const placeholder = `<span class="thumb-placeholder" aria-hidden="true">${icon('assets')}</span>`;
+  const image = hasPreview
+    ? `<img class="thumb" src="/assets/${escapeHtml(asset.id)}/preview" alt="" loading="lazy" onerror="this.hidden=true;this.parentElement.classList.add('preview-error')">`
+    : '';
+  return `<div class="thumb-frame" title="${escapeHtml(asset.alt_text_default)}">${image}${placeholder}</div>`;
 }
 
 function renderAssetForm(): string {

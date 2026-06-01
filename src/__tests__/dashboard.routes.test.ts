@@ -9,7 +9,8 @@ vi.mock('../replit_integrations/object_storage.js', () => ({
   uploadBuffer: vi.fn().mockResolvedValue({
     objectKey: 'uploads/test-uuid.png',
     publicUrl: 'https://storage.googleapis.com/test-bucket/uploads/test-uuid.png'
-  })
+  }),
+  downloadObject: vi.fn().mockResolvedValue(Buffer.from('preview-bytes'))
 }));
 
 const authHeaders = {
@@ -99,6 +100,7 @@ function repositories(): AppRepositories {
     },
     assets: {
       list: async () => Array.from(assets.values()),
+      get: async (id) => assets.get(id) ?? null,
       registerLocalImage: async (input) => {
         const asset: AssetRecord = {
           id: `asset-${assets.size + 1}`,
@@ -420,6 +422,15 @@ describe('dashboard routes', () => {
       expect(registeredInput!.width).toBe(10);
       expect(registeredInput!.height).toBe(10);
       expect(registeredInput!.objectKey).toBe('uploads/test-uuid.png');
+
+      const assetList = await app.inject({ method: 'GET', url: '/assets', headers: authHeaders });
+      expect(assetList.body).toContain('src="/assets/asset-1/preview"');
+      expect(assetList.body).not.toContain('thumb-fallback');
+
+      const preview = await app.inject({ method: 'GET', url: '/assets/asset-1/preview', headers: authHeaders });
+      expect(preview.statusCode).toBe(200);
+      expect(preview.headers['content-type']).toBe('image/png');
+      expect(preview.body).toBe('preview-bytes');
 
       await app.close();
     });
