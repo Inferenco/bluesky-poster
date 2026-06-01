@@ -156,7 +156,7 @@ describe('dashboard routes', () => {
       throw new Error('database unavailable');
     };
     const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret' } },
+      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
       repositories: repos
     });
 
@@ -169,7 +169,7 @@ describe('dashboard routes', () => {
 
   test('requires authentication for dashboard pages', async () => {
     const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret' } },
+      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
       repositories: repositories()
     });
 
@@ -182,7 +182,7 @@ describe('dashboard routes', () => {
   test('creates, edits, and pauses a message', async () => {
     const repos = repositories();
     const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret' } },
+      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
       repositories: repos
     });
 
@@ -220,7 +220,7 @@ describe('dashboard routes', () => {
 
   test('registers assets and offers them on message forms', async () => {
     const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret' } },
+      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
       repositories: repositories()
     });
 
@@ -244,7 +244,7 @@ describe('dashboard routes', () => {
 
   test('updates scheduler settings', async () => {
     const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret' } },
+      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
       repositories: repositories()
     });
 
@@ -277,7 +277,7 @@ describe('dashboard routes', () => {
       return originalUpdate(input);
     };
     const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret' } },
+      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
       repositories: repos
     });
 
@@ -297,7 +297,7 @@ describe('dashboard routes', () => {
   test('blocks asset deletion when messages still reference it', async () => {
     const repos = repositories();
     const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret' } },
+      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
       repositories: repos
     });
 
@@ -337,7 +337,7 @@ describe('dashboard routes', () => {
   test('deletes an asset when no messages reference it', async () => {
     const repos = repositories();
     const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret' } },
+      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
       repositories: repos
     });
 
@@ -385,7 +385,7 @@ describe('dashboard routes', () => {
         return original(input);
       };
       const app = await buildApp({
-        config: { dashboard: { user: 'admin', password: 'secret' } },
+        config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
         repositories: repos
       });
 
@@ -415,7 +415,7 @@ describe('dashboard routes', () => {
 
     test('returns 400 when no file is included', async () => {
       const app = await buildApp({
-        config: { dashboard: { user: 'admin', password: 'secret' } },
+        config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
         repositories: repositories()
       });
 
@@ -437,7 +437,7 @@ describe('dashboard routes', () => {
 
     test('returns 400 when alt text is missing', async () => {
       const app = await buildApp({
-        config: { dashboard: { user: 'admin', password: 'secret' } },
+        config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
         repositories: repositories()
       });
 
@@ -460,7 +460,7 @@ describe('dashboard routes', () => {
 
     test('returns 400 when file has a non-image MIME type', async () => {
       const app = await buildApp({
-        config: { dashboard: { user: 'admin', password: 'secret' } },
+        config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
         repositories: repositories()
       });
 
@@ -486,7 +486,7 @@ describe('dashboard routes', () => {
 
     test('returns 400 when file exceeds the 2 MB size limit', async () => {
       const app = await buildApp({
-        config: { dashboard: { user: 'admin', password: 'secret' } },
+        config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
         repositories: repositories()
       });
 
