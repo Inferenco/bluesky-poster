@@ -3,8 +3,8 @@ export interface AppConfig {
   port: number;
   dryRun: boolean;
   dashboard: {
-    user: string;
-    password: string;
+    user: string | null;
+    password: string | null;
     allowedReplitUsers: string[];
   };
   bluesky: {
@@ -22,8 +22,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     port: parsePort(env.PORT),
     dryRun: asBoolean(env.DRY_RUN),
     dashboard: {
-      user: required(env, 'DASHBOARD_ADMIN_USER'),
-      password: required(env, 'DASHBOARD_ADMIN_PASSWORD'),
+      user: env.DASHBOARD_ADMIN_USER?.trim() || null,
+      password: env.DASHBOARD_ADMIN_PASSWORD?.trim() || null,
       allowedReplitUsers: parseStringList(env.DASHBOARD_ALLOWED_REPLIT_USERS)
     },
     bluesky: {
