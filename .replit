@@ -14,6 +14,10 @@ deploymentTarget = "vm"
 [[ports]]
 localPort = 3000
 
+[[ports]]
+localPort = 5000
+externalPort = 80
+
 [nix]
 channel = "stable-25_05"
 
@@ -27,7 +31,7 @@ DASHBOARD_ALLOWED_REPLIT_USERS = "cryptoautistic8,inferenco"
 
 [agent]
 expertMode = true
-integrations = ["javascript_object_storage:2.0.0"]
+integrations = ["javascript_object_storage:2.0.0", "javascript_log_in_with_replit:2.0.0"]
 
 [workflows]
 runButton = "Project"

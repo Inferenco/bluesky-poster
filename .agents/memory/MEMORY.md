@@ -1,1 +1,2 @@
 - [Replit preview auth fix](replit-preview-auth.md) — only 401 when Basic header is present; browser requests must fall through to Replit login redirect.
+- [Replit OIDC in Fastify](replit-oidc-fastify.md) — blueprint targets Express+React; for Fastify+SSR use openid-client directly with @fastify/session (redirectUri goes in 4th arg, not checks object).

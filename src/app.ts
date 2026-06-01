@@ -1,12 +1,25 @@
 import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyReply } from 'fastify';
 import formbody from '@fastify/formbody';
 import multipart from '@fastify/multipart';
+import cookie from '@fastify/cookie';
+import session from '@fastify/session';
 import sharp from 'sharp';
 import type { AppConfig } from './config.js';
 import type { AssetRecord, RegisterLocalImageInput, RegisterObjectStorageImageInput } from './repositories/assets.js';
 import type { CreateMessageInput, MessageRecord, MessageStatus } from './repositories/messages.js';
 import { countGraphemes } from './validate.js';
 import { uploadBuffer } from './replit_integrations/object_storage.js';
+import {
+  buildLoginUrl,
+  buildLogoutUrl,
+  exchangeCode,
+  extractUserFromClaims,
+  generateState,
+  getCallbackUrl,
+  getRequestHost,
+  isUserAllowed,
+} from './replit_integrations/replitAuth.js';
+import { randomPKCECodeVerifier } from 'openid-client';
 
 export interface AppRepositories {
   messages: {
@@ -52,10 +65,20 @@ export interface DashboardRun {
 }
 
 function makeRequireAuth(config: Pick<AppConfig, 'dashboard'>) {
-  const credentialsConfigured = Boolean(config.dashboard.user && config.dashboard.password);
   const allowedReplitUsers = config.dashboard.allowedReplitUsers;
 
   return async function requireAuth(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+    // Primary: OIDC session auth
+    const sessionUser = request.session.user;
+    if (sessionUser) {
+      if (!isUserAllowed(sessionUser, allowedReplitUsers)) {
+        void reply.code(403).type('text/html').send(renderForbiddenPage());
+        return;
+      }
+      return;
+    }
+
+    // Fallback: legacy Replit header auth (dev/preview environment)
     const userId = request.headers['x-replit-user-id'];
     if (userId) {
       if (allowedReplitUsers.length > 0) {
@@ -68,24 +91,7 @@ function makeRequireAuth(config: Pick<AppConfig, 'dashboard'>) {
       return;
     }
 
-    if (credentialsConfigured) {
-      const authHeader = request.headers['authorization'] ?? '';
-      if (authHeader.startsWith('Basic ')) {
-        const decoded = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
-        const colon = decoded.indexOf(':');
-        if (colon !== -1) {
-          const user = decoded.slice(0, colon);
-          const password = decoded.slice(colon + 1);
-          if (user === config.dashboard.user && password === config.dashboard.password) return;
-        }
-        void reply.code(401).header('WWW-Authenticate', 'Basic realm="Dashboard"').send('Unauthorized');
-        return;
-      }
-    }
-
-    const host = (request.headers['x-forwarded-host'] as string | undefined) ?? request.headers['host'] ?? '';
-    const loginUrl = `https://replit.com/auth_with_repl_site?domain=${host}`;
-    void reply.type('text/html').send(renderLoginPage(loginUrl));
+    void reply.type('text/html').send(renderLoginPage());
   };
 }
 
@@ -101,8 +107,76 @@ export async function buildApp(options: {
       files: 1
     }
   });
+  await app.register(cookie);
+  await app.register(session, {
+    secret: process.env.SESSION_SECRET ?? 'fallback-secret-change-me-in-production!!',
+    cookie: {
+      secure: true,
+      httpOnly: true,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    },
+    saveUninitialized: false,
+  });
 
   const requireAuth = makeRequireAuth(options.config);
+
+  // OIDC auth routes
+  app.get('/api/login', async (request, reply) => {
+    const host = getRequestHost(request);
+    const state = generateState();
+    const codeVerifier = randomPKCECodeVerifier();
+    request.session.oidcState = state;
+    request.session.codeVerifier = codeVerifier;
+    await request.session.save();
+    const loginUrl = await buildLoginUrl(getCallbackUrl(host), state, codeVerifier);
+    return reply.redirect(loginUrl);
+  });
+
+  app.get('/api/callback', async (request, reply) => {
+    const host = getRequestHost(request);
+    const callbackUrl = getCallbackUrl(host);
+    const currentUrl = new URL(request.url, `https://${host}`);
+    const expectedState = request.session.oidcState;
+    const codeVerifier = request.session.codeVerifier;
+
+    if (!expectedState || !codeVerifier) {
+      return reply.redirect('/api/login');
+    }
+
+    try {
+      const tokens = await exchangeCode(callbackUrl, currentUrl, expectedState, codeVerifier);
+      const claims = tokens.claims() as Record<string, unknown>;
+      const user = extractUserFromClaims(claims);
+      console.log('[auth] OIDC login claims:', JSON.stringify(claims));
+
+      const allowedUsers = options.config.dashboard.allowedReplitUsers;
+      if (!isUserAllowed(user, allowedUsers)) {
+        request.session.user = undefined;
+        await request.session.save();
+        return reply.code(403).type('text/html').send(renderForbiddenPage());
+      }
+
+      request.session.user = user;
+      request.session.oidcState = undefined;
+      request.session.codeVerifier = undefined;
+      await request.session.save();
+      return reply.redirect('/');
+    } catch (err) {
+      console.error('[auth] OIDC callback error:', err);
+      return reply.redirect('/api/login');
+    }
+  });
+
+  app.get('/api/logout', async (request, reply) => {
+    const host = getRequestHost(request);
+    await request.session.destroy();
+    try {
+      const logoutUrl = await buildLogoutUrl(host);
+      return reply.redirect(logoutUrl);
+    } catch {
+      return reply.redirect('/');
+    }
+  });
 
   app.get('/healthz', async () => ({ ok: true }));
   app.get('/readyz', async (_request, reply) => {
@@ -372,7 +446,7 @@ function renderForbiddenPage(): string {
 </html>`;
 }
 
-function renderLoginPage(loginUrl: string): string {
+function renderLoginPage(): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -393,7 +467,7 @@ function renderLoginPage(loginUrl: string): string {
   <div class="card">
     <h1>Bluesky Poster</h1>
     <p>Sign in with your Replit account to access the dashboard.</p>
-    <button class="btn" onclick="try{window.top.location.href='${loginUrl}'}catch(e){window.open('${loginUrl}')}">Sign in with Replit</button>
+    <a class="btn" href="/api/login">Sign in with Replit</a>
   </div>
 </body>
 </html>`;
@@ -481,6 +555,7 @@ function renderPage(title: string, body: string): string {
       <a href="/assets">Assets</a>
       <a href="/settings">Settings</a>
       <a href="/runs">Runs</a>
+      <a href="/api/logout" style="margin-top:auto;opacity:.6;font-size:13px;">Sign out</a>
     </nav>
     <main>${body}</main>
   </div>
