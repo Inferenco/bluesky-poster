@@ -1,0 +1,209 @@
+2026-06-01 12:15:18.24
+3ef7b8de
+System
+metasidecar: loaded enterprise status from environment is_enterprise=false
+2026-06-01 12:15:18.24
+3ef7b8de
+System
+forwarding local port 3000 to external port 80 (mapped as 1104)
+
+2026-06-01 12:15:24.62
+3ef7b8de
+User
+Error: Cannot find module '/home/runner/workspace/dist/server.js'
+2026-06-01 12:15:24.62
+3ef7b8de
+User
+throw err;
+2026-06-01 12:15:24.62
+3ef7b8de
+User
+}
+2026-06-01 12:15:24.62
+3ef7b8de
+User
+Node.js v20.20.0
+2026-06-01 12:15:24.62
+3ef7b8de
+User
+at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:164:12)
+2026-06-01 12:15:24.62
+3ef7b8de
+User
+at Module._resolveFilename (node:internal/modules/cjs/loader:1207:15)
+2026-06-01 12:15:24.62
+3ef7b8de
+User
+at node:internal/main/run_main_module:28:49 {
+2026-06-01 12:15:24.62
+3ef7b8de
+User
+^
+2026-06-01 12:15:24.62
+3ef7b8de
+User
+at Module._load (node:internal/modules/cjs/loader:1038:27)
+2026-06-01 12:15:24.62
+3ef7b8de
+User
+requireStack: []
+2026-06-01 12:15:24.62
+3ef7b8de
+User
+node:internal/modules/cjs/loader:1210
+2026-06-01 12:15:24.62
+3ef7b8de
+User
+code: 'MODULE_NOT_FOUND',
+2026-06-01 12:15:24.63
+3ef7b8de
+System
+command finished with error [node dist/server.js]: exit status 1
+2026-06-01 12:15:24.76
+3ef7b8de
+User
+throw err;
+2026-06-01 12:15:24.76
+3ef7b8de
+User
+node:internal/modules/cjs/loader:1210
+2026-06-01 12:15:24.76
+3ef7b8de
+User
+^
+2026-06-01 12:15:24.76
+3ef7b8de
+User
+Error: Cannot find module '/home/runner/workspace/dist/server.js'
+2026-06-01 12:15:28.73
+3ef7b8de
+User
+at node:internal/main/run_main_module:28:49 {
+2026-06-01 12:15:28.73
+3ef7b8de
+User
+code: 'MODULE_NOT_FOUND',
+2026-06-01 12:15:28.73
+3ef7b8de
+User
+at Module._resolveFilename (node:internal/modules/cjs/loader:1207:15)
+2026-06-01 12:15:28.73
+3ef7b8de
+User
+}
+2026-06-01 12:15:28.73
+3ef7b8de
+User
+at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:164:12)
+2026-06-01 12:15:28.73
+3ef7b8de
+User
+node:internal/modules/cjs/loader:1210
+2026-06-01 12:15:28.73
+3ef7b8de
+User
+Error: Cannot find module '/home/runner/workspace/dist/server.js'
+2026-06-01 12:15:28.73
+3ef7b8de
+User
+^
+2026-06-01 12:15:28.73
+3ef7b8de
+User
+throw err;
+2026-06-01 12:15:28.73
+3ef7b8de
+User
+Node.js v20.20.0
+2026-06-01 12:15:28.73
+3ef7b8de
+User
+at Module._load (node:internal/modules/cjs/loader:1038:27)
+2026-06-01 12:15:28.73
+3ef7b8de
+User
+requireStack: []
+2026-06-01 12:15:28.74
+3ef7b8de
+System
+command finished with error [node dist/server.js]: exit status 1
+2026-06-01 12:15:31.40
+3ef7b8de
+User
+Error: Cannot find module '/home/runner/workspace/dist/server.js'
+2026-06-01 12:15:31.40
+3ef7b8de
+User
+node:internal/modules/cjs/loader:1210
+2026-06-01 12:15:31.40
+3ef7b8de
+User
+^
+2026-06-01 12:15:31.40
+3ef7b8de
+User
+throw err;
+2026-06-01 12:15:35.74
+3ef7b8de
+User
+at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:164:12)
+2026-06-01 12:15:35.74
+3ef7b8de
+User
+node:internal/modules/cjs/loader:1210
+2026-06-01 12:15:35.74
+3ef7b8de
+User
+at node:internal/main/run_main_module:28:49 {
+2026-06-01 12:15:35.74
+3ef7b8de
+User
+^
+2026-06-01 12:15:35.74
+3ef7b8de
+User
+}
+2026-06-01 12:15:35.74
+3ef7b8de
+User
+Node.js v20.20.0
+2026-06-01 12:15:35.74
+3ef7b8de
+User
+at Module._load (node:internal/modules/cjs/loader:1038:27)
+2026-06-01 12:15:35.74
+3ef7b8de
+User
+at Module._resolveFilename (node:internal/modules/cjs/loader:1207:15)
+2026-06-01 12:15:35.74
+3ef7b8de
+User
+Error: Cannot find module '/home/runner/workspace/dist/server.js'
+2026-06-01 12:15:35.74
+3ef7b8de
+User
+throw err;
+2026-06-01 12:15:35.74
+3ef7b8de
+User
+code: 'MODULE_NOT_FOUND',
+2026-06-01 12:15:35.74
+3ef7b8de
+User
+requireStack: []
+2026-06-01 12:15:35.75
+3ef7b8de
+System
+command finished with error [node dist/server.js]: exit status 1
+2026-06-01 12:15:35.75
+3ef7b8de
+System
+command finished with error [node dist/server.js]: exit status 1
+2026-06-01 12:15:44.51
+3ef7b8de
+User
+Node.js v20.20.0
+2026-06-01 12:15:44.51
+3ef7b8de
+User
+^

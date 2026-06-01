@@ -7,7 +7,7 @@ requiredFiles = [".replit", "replit.nix", "package.json"]
 
 [deployment]
 build = ["npm", "run", "build"]
-run = ["node", "dist/server.js"]
+run = ["bash", "-c", "PORT=3000 node dist/src/server.js"]
 ignorePorts = false
 deploymentTarget = "vm"
 
