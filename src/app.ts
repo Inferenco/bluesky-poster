@@ -11,6 +11,7 @@ import type { AssetRecord, RegisterLocalImageInput, RegisterObjectStorageImageIn
 import type { CreateMessageInput, MessageRecord, MessageStatus } from './repositories/messages.js';
 import { countGraphemes } from './validate.js';
 import { downloadObject, uploadBuffer } from './replit_integrations/object_storage.js';
+import type { PostGenerator } from './services/postGenerator.js';
 import {
   buildLoginUrl,
   buildLogoutUrl,
@@ -101,6 +102,7 @@ function makeRequireAuth(config: Pick<AppConfig, 'dashboard'>) {
 export async function buildApp(options: {
   config: Pick<AppConfig, 'dashboard'>;
   repositories: AppRepositories;
+  postGenerator?: PostGenerator;
 }): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   await app.register(formbody);
@@ -200,6 +202,20 @@ export async function buildApp(options: {
   app.get('/messages/new', { preHandler: requireAuth }, async (_request, reply) => {
     const assets = await options.repositories.assets.list();
     return reply.type('text/html').send(renderPage('New message', 'messages', renderMessageForm('/messages', assets)));
+  });
+
+  app.post('/messages/generate', { preHandler: requireAuth }, async (_request, reply) => {
+    if (!options.postGenerator) {
+      return reply.code(503).send({ error: 'OPENAI_API_KEY is not configured.' });
+    }
+
+    try {
+      return reply.send(await options.postGenerator.generate());
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const statusCode = message.includes('OPENAI_API_KEY') ? 503 : 502;
+      return reply.code(statusCode).send({ error: message });
+    }
   });
 
   app.post('/messages', { preHandler: requireAuth }, async (request, reply) => {
@@ -520,7 +536,8 @@ type IconName =
   | 'archive'
   | 'trash'
   | 'upload'
-  | 'save';
+  | 'save'
+  | 'sparkles';
 
 function renderForbiddenPage(): string {
   return renderAuthPage({
@@ -622,6 +639,8 @@ function renderPage(title: string, active: NavSection, body: string): string {
     .tag-list { display: flex; flex-wrap: wrap; gap: 6px; min-width: 120px; }
     .tag { display: inline-flex; align-items: center; min-height: 24px; border: 1px solid rgba(20, 120, 255, .46); border-radius: 7px; padding: 0 8px; color: #61a8ff; background: rgba(20, 120, 255, .10); font-size: 12px; font-weight: 650; }
     .form-panel { max-width: 860px; border: 1px solid rgba(68, 103, 154, .24); border-radius: 8px; background: rgba(7, 8, 18, .34); padding: 22px; }
+    .form-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 16px; }
+    .form-tools .upload-status { margin-right: 0; }
     .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
     label { display: grid; gap: 8px; color: var(--muted); font-size: 13px; font-weight: 700; }
     small { color: var(--muted-2); font-size: 12px; line-height: 1.45; }
@@ -734,21 +753,51 @@ function renderMessageForm(action: string, assets: AssetRecord[], message?: Mess
     <div class="page-head"><div><h2>${message ? 'Edit' : 'New'} message</h2><p>Approved messages enter the scheduler pool. Drafts and paused messages stay out of rotation.</p></div></div>
     <div class="section-body">
       <form class="form-panel" method="post" action="${escapeHtml(action)}">
+        <div class="form-tools">
+          <button type="button" class="button" id="generatePostBtn" onclick="generatePostSuggestion(event)">${icon('sparkles')}<span>Generate post</span></button>
+          <span id="generatePostStatus" class="upload-status" aria-live="polite"></span>
+        </div>
         <div class="form-grid">
-          <label class="full">Body <textarea name="body">${escapeHtml(message?.body ?? '')}</textarea></label>
+          <label class="full">Body <textarea name="body" id="messageBody">${escapeHtml(message?.body ?? '')}</textarea></label>
           <label>Status <select name="status">
             ${['draft', 'approved', 'paused', 'archived'].map((status) => `<option value="${status}"${message?.status === status ? ' selected' : ''}>${status}</option>`).join('')}
           </select></label>
           <label>Weight <input name="weight" type="number" min="1" value="${message?.weight ?? 100}"></label>
           <label>Cooldown hours <input name="cooldownHours" type="number" min="1" value="${message?.cooldown_hours ?? 168}"></label>
-          <label>Tags <input name="tags" value="${escapeHtml(message?.tags.join(', ') ?? '')}" placeholder="travel, photography"><small>Comma-separated words (no # needed). Appended as hashtags at the end of the post.</small></label>
+          <label>Tags <input name="tags" id="messageTags" value="${escapeHtml(message?.tags.join(', ') ?? '')}" placeholder="travel, photography"><small>Comma-separated words (no # needed). Appended as hashtags at the end of the post.</small></label>
           <label class="full">Registered asset <select name="imageAssetId">${assetOptions}</select>${assetRefNote}</label>
           <label class="full">Image alt text <input name="imageAlt" value="${escapeHtml(message?.image_alt ?? '')}"></label>
         </div>
         <div class="form-actions"><a class="button" href="/messages">Cancel</a><button class="button primary">${icon('save')}<span>Save</span></button></div>
       </form>
     </div>
-  </section>`;
+  </section>
+  <script>
+async function generatePostSuggestion(e) {
+  e.preventDefault();
+  const btn = document.getElementById('generatePostBtn');
+  const status = document.getElementById('generatePostStatus');
+  const body = document.getElementById('messageBody');
+  const tags = document.getElementById('messageTags');
+  btn.disabled = true;
+  status.style.color = 'var(--muted)';
+  status.textContent = 'Generating...';
+  try {
+    const resp = await fetch('/messages/generate', { method: 'POST' });
+    const payload = await resp.json().catch(function () { return {}; });
+    if (!resp.ok) throw new Error(payload.error || 'Generation failed');
+    body.value = payload.body || '';
+    tags.value = Array.isArray(payload.tags) ? payload.tags.join(', ') : '';
+    status.style.color = 'var(--success)';
+    status.textContent = 'Draft ready.';
+  } catch (err) {
+    status.style.color = 'var(--danger)';
+    status.textContent = err.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+  </script>`;
 }
 
 function renderAssets(assets: AssetRecord[], errorMsg?: string | null): string {
@@ -950,7 +999,8 @@ function icon(name: IconName): string {
     archive: '<path d="M4 7h16v4H4z"/><path d="M6 11v7h12v-7M10 14h4"/>',
     trash: '<path d="M4.5 7h15M10 11v6M14 11v6M6.5 7l1 13h9l1-13M9 7l1-3h4l1 3"/>',
     upload: '<path d="M12 16V5M8 9l4-4 4 4"/><path d="M5 18.5h14"/>',
-    save: '<path d="M5 4h12l2 2v14H5V4Z"/><path d="M8 4v6h8M8 17h8"/>'
+    save: '<path d="M5 4h12l2 2v14H5V4Z"/><path d="M8 4v6h8M8 17h8"/>',
+    sparkles: '<path d="M12 3.5 13.8 9l5.7 2-5.7 2L12 18.5 10.2 13l-5.7-2 5.7-2L12 3.5Z"/><path d="m18 4 .6 1.8L20.5 6l-1.9.7L18 9l-.6-2.3L15.5 6l1.9-.2L18 4ZM5.5 15l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z"/>'
   };
   return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]}</svg>`;
 }

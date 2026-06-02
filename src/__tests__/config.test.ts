@@ -24,4 +24,15 @@ describe('loadConfig', () => {
     expect(config.bluesky.identifier).toBe('example.bsky.social');
     expect(config.dryRun).toBe(true);
   });
+
+  test('loads optional OpenAI generation settings from Replit secrets', () => {
+    const config = loadConfig({
+      DATABASE_URL: 'postgres://user:pass@host/db',
+      OPENAI_API_KEY: 'sk-test',
+      OPENAI_POST_MODEL: 'gpt-5.4-mini'
+    });
+
+    expect(config.ai.openaiApiKey).toBe('sk-test');
+    expect(config.ai.openaiPostModel).toBe('gpt-5.4-mini');
+  });
 });

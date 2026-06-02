@@ -4,6 +4,7 @@ import sharp from 'sharp';
 import { buildApp, type AppRepositories } from '../app.js';
 import type { AssetRecord } from '../repositories/assets.js';
 import type { MessageRecord, MessageStatus } from '../repositories/messages.js';
+import type { PostGenerator } from '../services/postGenerator.js';
 
 vi.mock('../replit_integrations/object_storage.js', () => ({
   uploadBuffer: vi.fn().mockResolvedValue({
@@ -247,10 +248,85 @@ describe('dashboard routes', () => {
     expect(form.body).toContain('asset-1');
     expect(form.body).toContain('Nova portrait');
     expect(form.body).not.toContain('name="imagePath"');
+    expect(form.body).toContain('id="generatePostBtn"');
+    expect(form.body).toContain('/messages/generate');
 
     const assetForm = await app.inject({ method: 'GET', url: '/assets/new', headers: authHeaders });
     expect(assetForm.body).toContain('/assets/upload-multipart');
     expect(assetForm.body).not.toContain('Register local file path');
+
+    await app.close();
+  });
+
+  test('generates an authenticated AI message suggestion without saving it', async () => {
+    const generator: PostGenerator = {
+      generate: async () => ({
+        body: 'Ship custom software, AI systems, and Web3 platforms with Inferenco. Start at inferenco.com or spielcrypto@inferenco.com',
+        tags: ['Inferenco', 'AI', 'Web3']
+      })
+    };
+    const app = await buildApp({
+      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
+      repositories: repositories(),
+      postGenerator: generator
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/messages/generate',
+      headers: authHeaders
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      body: 'Ship custom software, AI systems, and Web3 platforms with Inferenco. Start at inferenco.com or spielcrypto@inferenco.com',
+      tags: ['Inferenco', 'AI', 'Web3']
+    });
+
+    const list = await app.inject({ method: 'GET', url: '/messages', headers: authHeaders });
+    expect(list.body).toContain('No saved messages yet.');
+
+    await app.close();
+  });
+
+  test('requires Replit authentication before generating AI suggestions', async () => {
+    const generator: PostGenerator = {
+      generate: async () => ({
+        body: 'This should not be generated for anonymous users.',
+        tags: ['Inferenco']
+      })
+    };
+    const app = await buildApp({
+      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
+      repositories: repositories(),
+      postGenerator: generator
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/messages/generate'
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain('Sign in with your Replit account');
+
+    await app.close();
+  });
+
+  test('returns a clear AI configuration error when no generator is configured', async () => {
+    const app = await buildApp({
+      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
+      repositories: repositories()
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/messages/generate',
+      headers: authHeaders
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: 'OPENAI_API_KEY is not configured.' });
 
     await app.close();
   });
