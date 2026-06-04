@@ -1,14 +1,15 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { MessageRecord } from '../repositories/messages.js';
+import { normalizePlatforms, type MessageRecord, type PostingPlatform } from '../repositories/messages.js';
 import { countGraphemes, MAX_GRAPHEMES } from '../validate.js';
 
 const MAX_IMAGE_BYTES = 2_000_000;
 
 export type PostRunStatus = 'success' | 'failed' | 'dry_run';
+export type PosterStatus = PostRunStatus | 'partial';
 
 export interface PosterResult {
-  status: PostRunStatus;
+  status: PosterStatus;
   uri: string | null;
   cid: string | null;
 }
@@ -17,12 +18,20 @@ export interface BlueskyPublisher {
   publish(message: MessageRecord): Promise<{ uri: string | null; cid: string | null }>;
 }
 
+export interface PlatformPublisher {
+  platform: PostingPlatform;
+  publish(message: MessageRecord): Promise<{ uri: string | null; cid: string | null; url?: string | null }>;
+}
+
 export interface RunRecorder {
   record(input: {
     messageId: string;
+    platform?: PostingPlatform;
     status: PostRunStatus;
     bskyUri?: string | null;
     bskyCid?: string | null;
+    platformUri?: string | null;
+    platformUrl?: string | null;
     error?: string | null;
     httpStatus?: number | null;
     retryCount?: number;
@@ -30,49 +39,117 @@ export interface RunRecorder {
 }
 
 export class PosterService {
+  private readonly publishers: PlatformPublisher[];
+
   constructor(
     private readonly deps: {
-      publisher: BlueskyPublisher;
+      publisher?: BlueskyPublisher;
+      publishers?: PlatformPublisher[];
       runs: RunRecorder;
       dryRun: boolean;
     }
-  ) {}
+  ) {
+    this.publishers = deps.publishers ?? (deps.publisher ? [asBlueskyPlatformPublisher(deps.publisher)] : []);
+  }
 
   async publish(message: MessageRecord): Promise<PosterResult> {
+    const platforms = normalizePlatforms(message.platforms);
+    const selectedPublishers = platforms.map((platform) => ({
+      platform,
+      publisher: this.publishers.find((candidate) => candidate.platform === platform) ?? null
+    }));
+
     try {
-      await validateOutboundMessage(message);
+      await validateOutboundMessage(message, platforms.includes('bluesky'));
 
       if (this.deps.dryRun) {
-        await this.deps.runs.record({ messageId: message.id, status: 'dry_run' });
+        for (const { platform, publisher } of selectedPublishers) {
+          if (!publisher) continue;
+          await this.deps.runs.record({ messageId: message.id, platform, status: 'dry_run' });
+        }
         return { status: 'dry_run', uri: null, cid: null };
       }
 
-      const result = await this.deps.publisher.publish(message);
-      await this.deps.runs.record({
-        messageId: message.id,
-        status: 'success',
-        bskyUri: result.uri,
-        bskyCid: result.cid
-      });
+      let successCount = 0;
+      let failureCount = 0;
+      let firstSuccess: { uri: string | null; cid: string | null } = { uri: null, cid: null };
 
-      return { status: 'success', uri: result.uri, cid: result.cid };
+      for (const { platform, publisher } of selectedPublishers) {
+        if (!publisher) {
+          failureCount += 1;
+          await this.deps.runs.record({
+            messageId: message.id,
+            platform,
+            status: 'failed',
+            error: `${platform} publisher is not configured`
+          });
+          continue;
+        }
+
+        try {
+          const result = await publisher.publish(message);
+          successCount += 1;
+          if (successCount === 1) {
+            firstSuccess = { uri: result.uri, cid: result.cid };
+          }
+          await this.deps.runs.record({
+            messageId: message.id,
+            platform,
+            status: 'success',
+            bskyUri: platform === 'bluesky' ? result.uri : null,
+            bskyCid: platform === 'bluesky' ? result.cid : null,
+            platformUri: result.uri,
+            platformUrl: result.url ?? result.uri
+          });
+        } catch (err) {
+          failureCount += 1;
+          await this.deps.runs.record({
+            messageId: message.id,
+            platform,
+            status: 'failed',
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
+      }
+
+      if (successCount > 0) {
+        return {
+          status: failureCount > 0 ? 'partial' : 'success',
+          uri: firstSuccess.uri,
+          cid: firstSuccess.cid
+        };
+      }
+
+      throw new Error('No selected platforms published successfully');
     } catch (err) {
-      await this.deps.runs.record({
-        messageId: message.id,
-        status: 'failed',
-        error: err instanceof Error ? err.message : String(err)
-      });
+      if (err instanceof Error && err.message !== 'No selected platforms published successfully') {
+        for (const platform of platforms) {
+          await this.deps.runs.record({
+            messageId: message.id,
+            platform,
+            status: 'failed',
+            error: err.message
+          });
+        }
+      }
       throw err;
     }
   }
 }
 
-export async function validateOutboundMessage(message: MessageRecord): Promise<void> {
+function asBlueskyPlatformPublisher(publisher: BlueskyPublisher): PlatformPublisher {
+  return {
+    platform: 'bluesky',
+    publish: (message) => publisher.publish(message)
+  };
+}
+
+export async function validateOutboundMessage(message: MessageRecord, validateImage = true): Promise<void> {
   if (countGraphemes(message.body) > MAX_GRAPHEMES) {
     throw new Error('Message must be 300 graphemes or fewer');
   }
 
-  const hasImage = Boolean(message.image_path || message.image_content || message.image_public_url);
+  const hasImage = validateImage && Boolean(message.image_path || message.image_content || message.image_public_url);
   if (hasImage && !message.image_alt?.trim()) {
     throw new Error('Image alt text is required');
   }

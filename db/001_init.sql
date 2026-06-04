@@ -24,6 +24,7 @@ create table if not exists messages (
   weight integer not null default 100,
   cooldown_hours integer not null default 168,
   tags jsonb not null default '[]',
+  platforms jsonb not null default '["bluesky"]',
   self_labels jsonb not null default '[]',
   image_asset_id text references assets(id),
   image_path text,
@@ -36,6 +37,7 @@ create table if not exists messages (
 );
 
 alter table messages add column if not exists image_asset_id text references assets(id);
+alter table messages add column if not exists platforms jsonb not null default '["bluesky"]';
 
 create index if not exists messages_status_idx on messages (status);
 create index if not exists messages_normalised_hash_idx on messages (normalised_hash);
@@ -45,9 +47,12 @@ create table if not exists post_runs (
   id text primary key,
   message_id text not null references messages(id) on delete cascade,
   attempted_at timestamptz not null default now(),
+  platform text not null default 'bluesky',
   status text not null,
   bsky_uri text,
   bsky_cid text,
+  platform_uri text,
+  platform_url text,
   http_status integer,
   error text,
   retry_count integer not null default 0
@@ -56,6 +61,7 @@ create table if not exists post_runs (
 create index if not exists post_runs_message_id_idx on post_runs (message_id);
 create index if not exists post_runs_attempted_at_idx on post_runs (attempted_at desc);
 create index if not exists post_runs_status_idx on post_runs (status);
+create index if not exists post_runs_platform_idx on post_runs (platform);
 
 create table if not exists scheduler_state (
   singleton_key text primary key,

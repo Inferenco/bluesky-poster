@@ -27,6 +27,7 @@ function makeMessage(overrides: Partial<MessageRecord> = {}): MessageRecord {
     weight: overrides.weight ?? 100,
     cooldown_hours: overrides.cooldown_hours ?? 168,
     tags: overrides.tags ?? [],
+    platforms: overrides.platforms ?? ['bluesky'],
     self_labels: overrides.self_labels ?? [],
     image_asset_id: overrides.image_asset_id ?? null,
     image_path: overrides.image_path ?? null,
@@ -63,6 +64,7 @@ function repositories(): AppRepositories {
           weight: input.weight,
           cooldown_hours: input.cooldownHours,
           tags: input.tags,
+          platforms: input.platforms,
           image_asset_id: input.imageAssetId,
           image_path: input.imagePath,
           image_alt: input.imageAlt
@@ -80,6 +82,7 @@ function repositories(): AppRepositories {
           weight: input.weight ?? current.weight,
           cooldown_hours: input.cooldownHours ?? current.cooldown_hours,
           tags: input.tags ?? current.tags,
+          platforms: input.platforms ?? current.platforms,
           image_asset_id: input.imageAssetId ?? current.image_asset_id,
           image_path: input.imagePath ?? current.image_path,
           image_alt: input.imageAlt ?? current.image_alt
@@ -198,7 +201,7 @@ describe('dashboard routes', () => {
       method: 'POST',
       url: '/messages',
       headers: { ...authHeaders, 'content-type': 'application/x-www-form-urlencoded' },
-      payload: 'body=First%20message&status=approved&weight=250&cooldownHours=12&tags=launch,updates&imageAlt=Launch%20image'
+      payload: 'body=First%20message&status=approved&weight=250&cooldownHours=12&tags=launch,updates&platforms=bluesky&platforms=mastodon&imageAlt=Launch%20image'
     });
     expect(created.statusCode).toBe(302);
 
@@ -206,7 +209,7 @@ describe('dashboard routes', () => {
       method: 'POST',
       url: '/messages/msg-1',
       headers: { ...authHeaders, 'content-type': 'application/x-www-form-urlencoded' },
-      payload: 'body=Edited%20message&weight=150&cooldownHours=24&tags=edited'
+      payload: 'body=Edited%20message&weight=150&cooldownHours=24&tags=edited&platforms=mastodon'
     });
     expect(edited.statusCode).toBe(302);
 
@@ -224,6 +227,30 @@ describe('dashboard routes', () => {
     expect(list.body).toContain('paused');
     expect(list.body).toContain('150');
     expect(list.body).toContain('24h');
+    expect(list.body).toContain('Mastodon');
+    await app.close();
+  });
+
+  test('renders platform checkboxes and defaults new messages to Bluesky', async () => {
+    const repos = repositories();
+    const app = await buildApp({
+      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
+      repositories: repos
+    });
+
+    const form = await app.inject({ method: 'GET', url: '/messages/new', headers: authHeaders });
+    expect(form.body).toContain('name="platforms" value="bluesky" checked');
+    expect(form.body).toContain('name="platforms" value="mastodon"');
+
+    await app.inject({
+      method: 'POST',
+      url: '/messages',
+      headers: { ...authHeaders, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: 'body=Default%20platform&status=draft&weight=100&cooldownHours=168'
+    });
+
+    const list = await app.inject({ method: 'GET', url: '/messages', headers: authHeaders });
+    expect(list.body).toContain('Bluesky');
     await app.close();
   });
 

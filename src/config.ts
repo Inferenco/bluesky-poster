@@ -16,7 +16,14 @@ export interface AppConfig {
     openaiApiKey: string | null;
     openaiPostModel: string;
   };
+  mastodon: {
+    instanceUrl: string | null;
+    accessToken: string | null;
+    visibility: MastodonVisibility;
+  };
 }
+
+export type MastodonVisibility = 'public' | 'unlisted' | 'private' | 'direct';
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const databaseUrl = required(env, 'DATABASE_URL');
@@ -38,6 +45,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ai: {
       openaiApiKey: env.OPENAI_API_KEY?.trim() || null,
       openaiPostModel: env.OPENAI_POST_MODEL?.trim() || 'gpt-5.4-mini'
+    },
+    mastodon: {
+      instanceUrl: normalizeOptionalUrl(env.MASTODON_INSTANCE_URL),
+      accessToken: env.MASTODON_ACCESS_TOKEN?.trim() || null,
+      visibility: parseMastodonVisibility(env.MASTODON_VISIBILITY)
     }
   };
 }
@@ -66,4 +78,15 @@ function asBoolean(raw: string | undefined): boolean {
 function parseStringList(raw: string | undefined): string[] {
   if (!raw?.trim()) return [];
   return raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+}
+
+function normalizeOptionalUrl(raw: string | undefined): string | null {
+  const value = raw?.trim() || 'https://mastodon.social';
+  return value.replace(/\/+$/, '');
+}
+
+function parseMastodonVisibility(raw: string | undefined): MastodonVisibility {
+  const value = raw?.trim().toLowerCase();
+  if (value === 'unlisted' || value === 'private' || value === 'direct') return value;
+  return 'public';
 }

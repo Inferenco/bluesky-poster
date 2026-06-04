@@ -16,6 +16,7 @@ const message: MessageRecord = {
   weight: 100,
   cooldown_hours: 168,
   tags: [],
+  platforms: ['bluesky'],
   self_labels: [],
   image_asset_id: null,
   image_path: null,

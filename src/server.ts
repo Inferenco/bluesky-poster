@@ -3,13 +3,14 @@ import { buildApp } from './app.js';
 import { AtprotoBlueskyPublisher, getAgent } from './bluesky.js';
 import { loadConfig } from './config.js';
 import { createPool } from './db/client.js';
+import { MastodonPublisher } from './mastodon.js';
 import { AssetsRepository } from './repositories/assets.js';
 import { PgLockRepository } from './repositories/locks.js';
 import { MessagesRepository } from './repositories/messages.js';
 import { RunsRepository } from './repositories/runs.js';
 import { SettingsRepository } from './repositories/settings.js';
 import { OpenAIInferencoPostGenerator } from './services/postGenerator.js';
-import { PosterService } from './services/poster.js';
+import { PosterService, type PlatformPublisher } from './services/poster.js';
 import { SchedulerService } from './services/scheduler.js';
 
 const SCHEDULER_POLL_MS = 15_000;
@@ -23,7 +24,7 @@ async function main(): Promise<void> {
   const runs = new RunsRepository(pool);
   const locks = new PgLockRepository(pool);
 
-  let publisher: { publish(message: import('./repositories/messages.js').MessageRecord): Promise<{ uri: string | null; cid: string | null }> };
+  let blueskyPublisher: PlatformPublisher;
   if (config.bluesky.identifier && config.bluesky.appPassword) {
     try {
       const agent = await getAgent({
@@ -31,18 +32,30 @@ async function main(): Promise<void> {
         password: config.bluesky.appPassword,
         serviceUrl: config.bluesky.serviceUrl
       });
-      publisher = new AtprotoBlueskyPublisher(agent);
+      blueskyPublisher = {
+        platform: 'bluesky',
+        publish: (message) => new AtprotoBlueskyPublisher(agent).publish(message)
+      };
       console.log('Bluesky login successful');
     } catch (err) {
       console.error('Bluesky login failed — server will start but posting is disabled:', err instanceof Error ? err.message : err);
-      publisher = { async publish() { throw new Error('Bluesky login failed at startup — check credentials'); } };
+      blueskyPublisher = { platform: 'bluesky', async publish() { throw new Error('Bluesky login failed at startup — check credentials'); } };
     }
   } else {
     console.warn('BSKY_IDENTIFIER / BSKY_APP_PASSWORD not set — posting disabled');
-    publisher = { async publish() { throw new Error('Missing BSKY_IDENTIFIER/BSKY_APP_PASSWORD'); } };
+    blueskyPublisher = { platform: 'bluesky', async publish() { throw new Error('Missing BSKY_IDENTIFIER/BSKY_APP_PASSWORD'); } };
   }
 
-  const poster = new PosterService({ publisher, runs, dryRun: config.dryRun });
+  const publishers: PlatformPublisher[] = [blueskyPublisher];
+  if (config.mastodon.instanceUrl && config.mastodon.accessToken) {
+    publishers.push(new MastodonPublisher({
+      instanceUrl: config.mastodon.instanceUrl,
+      accessToken: config.mastodon.accessToken,
+      visibility: config.mastodon.visibility
+    }));
+  }
+
+  const poster = new PosterService({ publishers, runs, dryRun: config.dryRun });
   const scheduler = new SchedulerService({
     settings,
     locks,
