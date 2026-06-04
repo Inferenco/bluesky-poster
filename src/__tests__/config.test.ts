@@ -35,4 +35,25 @@ describe('loadConfig', () => {
     expect(config.ai.openaiApiKey).toBe('sk-test');
     expect(config.ai.openaiPostModel).toBe('gpt-5.4-mini');
   });
+
+  test('loads optional Mastodon posting settings from Replit secrets', () => {
+    const config = loadConfig({
+      DATABASE_URL: 'postgres://user:pass@host/db',
+      MASTODON_INSTANCE_URL: 'https://mastodon.social/',
+      MASTODON_ACCESS_TOKEN: 'mastodon-token',
+      MASTODON_VISIBILITY: 'unlisted'
+    });
+
+    expect(config.mastodon.instanceUrl).toBe('https://mastodon.social');
+    expect(config.mastodon.accessToken).toBe('mastodon-token');
+    expect(config.mastodon.visibility).toBe('unlisted');
+  });
+
+  test('defaults Mastodon instance and visibility when credentials are absent', () => {
+    const config = loadConfig({ DATABASE_URL: 'postgres://user:pass@host/db' });
+
+    expect(config.mastodon.instanceUrl).toBe('https://mastodon.social');
+    expect(config.mastodon.accessToken).toBeNull();
+    expect(config.mastodon.visibility).toBe('public');
+  });
 });

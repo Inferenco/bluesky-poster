@@ -6,6 +6,7 @@ export interface Queryable {
 }
 
 export type MessageStatus = 'draft' | 'approved' | 'paused' | 'archived';
+export type PostingPlatform = 'bluesky' | 'mastodon';
 
 export interface MessageRecord {
   id: string;
@@ -14,6 +15,7 @@ export interface MessageRecord {
   weight: number;
   cooldown_hours: number;
   tags: string[];
+  platforms: PostingPlatform[];
   self_labels: string[];
   image_asset_id: string | null;
   image_path: string | null;
@@ -37,6 +39,7 @@ export interface CreateMessageInput {
   weight?: number;
   cooldownHours?: number;
   tags?: string[];
+  platforms?: PostingPlatform[];
   selfLabels?: string[];
   imageAssetId?: string | null;
   imagePath?: string | null;
@@ -49,6 +52,7 @@ export interface UpdateMessageInput {
   weight?: number;
   cooldownHours?: number;
   tags?: string[];
+  platforms?: PostingPlatform[];
   selfLabels?: string[];
   imageAssetId?: string | null;
   imagePath?: string | null;
@@ -71,6 +75,7 @@ export class MessagesRepository {
       input.weight ?? 100,
       input.cooldownHours ?? 168,
       JSON.stringify(input.tags ?? []),
+      JSON.stringify(normalizePlatforms(input.platforms)),
       JSON.stringify(input.selfLabels ?? []),
       input.imageAssetId ?? null,
       input.imagePath ?? null,
@@ -80,9 +85,9 @@ export class MessagesRepository {
 
     const result = await this.db.query<MessageRecord>(
       `insert into messages (
-        id, body, status, weight, cooldown_hours, tags, self_labels,
+        id, body, status, weight, cooldown_hours, tags, platforms, self_labels,
         image_asset_id, image_path, image_alt, normalised_hash
-      ) values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11)
+      ) values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11, $12)
       returning *`,
       values
     );
@@ -156,11 +161,12 @@ export class MessagesRepository {
         weight = $4,
         cooldown_hours = $5,
         tags = $6::jsonb,
-        self_labels = $7::jsonb,
-        image_asset_id = $8,
-        image_path = $9,
-        image_alt = $10,
-        normalised_hash = $11,
+        platforms = $7::jsonb,
+        self_labels = $8::jsonb,
+        image_asset_id = $9,
+        image_path = $10,
+        image_alt = $11,
+        normalised_hash = $12,
         updated_at = now()
       where id = $1
       returning *`,
@@ -171,6 +177,7 @@ export class MessagesRepository {
         input.weight ?? current.weight,
         input.cooldownHours ?? current.cooldown_hours,
         JSON.stringify(input.tags ?? current.tags),
+        JSON.stringify(hasOwn(input, 'platforms') ? normalizePlatforms(input.platforms) : normalizePlatforms(current.platforms)),
         JSON.stringify(input.selfLabels ?? current.self_labels),
         hasOwn(input, 'imageAssetId') ? input.imageAssetId : current.image_asset_id,
         hasOwn(input, 'imagePath') ? input.imagePath : current.image_path,
@@ -215,6 +222,12 @@ function validateMessageBody(body: string): void {
   if (countGraphemes(body) > MAX_GRAPHEMES) {
     throw new Error('Message must be 300 graphemes or fewer');
   }
+}
+
+export function normalizePlatforms(input: unknown): PostingPlatform[] {
+  if (!Array.isArray(input)) return ['bluesky'];
+  const platforms = input.filter((value): value is PostingPlatform => value === 'bluesky' || value === 'mastodon');
+  return platforms.length > 0 ? Array.from(new Set(platforms)) : ['bluesky'];
 }
 
 function hasOwn<T extends object>(value: T, key: keyof T): boolean {

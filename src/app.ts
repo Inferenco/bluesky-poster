@@ -8,7 +8,7 @@ import session from '@fastify/session';
 import sharp from 'sharp';
 import type { AppConfig } from './config.js';
 import type { AssetRecord, RegisterLocalImageInput, RegisterObjectStorageImageInput } from './repositories/assets.js';
-import type { CreateMessageInput, MessageRecord, MessageStatus } from './repositories/messages.js';
+import { normalizePlatforms, type CreateMessageInput, type MessageRecord, type MessageStatus, type PostingPlatform } from './repositories/messages.js';
 import { countGraphemes } from './validate.js';
 import { downloadObject, uploadBuffer } from './replit_integrations/object_storage.js';
 import type { PostGenerator } from './services/postGenerator.js';
@@ -65,6 +65,9 @@ export interface DashboardRun {
   attempted_at: Date | string;
   status: string;
   bsky_uri: string | null;
+  platform: string;
+  platform_uri: string | null;
+  platform_url: string | null;
   error: string | null;
 }
 
@@ -226,6 +229,7 @@ export async function buildApp(options: {
       weight: positiveInteger(body.weight, 100),
       cooldownHours: positiveInteger(body.cooldownHours, 168),
       tags: normalizeTags(body.tags),
+      platforms: platformsFrom(body.platforms),
       imageAssetId: optionalString(body.imageAssetId),
       imagePath: optionalString(body.imagePath),
       imageAlt: optionalString(body.imageAlt)
@@ -254,6 +258,7 @@ export async function buildApp(options: {
       weight: positiveInteger(body.weight, 100),
       cooldownHours: positiveInteger(body.cooldownHours, 168),
       tags: normalizeTags(body.tags),
+      platforms: platformsFrom(body.platforms),
       imageAssetId: optionalString(body.imageAssetId),
       imageAlt: optionalString(body.imageAlt)
     };
@@ -454,6 +459,10 @@ function normalizeTags(value: unknown): string[] {
   return listFromCsv(value).map((t) => t.replace(/^#+/, ''));
 }
 
+function platformsFrom(value: unknown): PostingPlatform[] {
+  return normalizePlatforms(Array.isArray(value) ? value : value ? [value] : []);
+}
+
 function parseSchedulerIntervals(minValue: unknown, maxValue: unknown): { minIntervalMinutes: number; maxIntervalMinutes: number } | null {
   const minIntervalMinutes = Number(minValue);
   const maxIntervalMinutes = Number(maxValue);
@@ -651,6 +660,8 @@ function renderPage(title: string, active: NavSection, body: string): string {
     textarea { min-height: 168px; resize: vertical; grid-column: 1 / -1; line-height: 1.55; }
     .full { grid-column: 1 / -1; }
     .checkbox-label span { display: inline-flex; align-items: center; gap: 10px; color: var(--text); }
+    .checkbox-group { display: flex; flex-wrap: wrap; gap: 14px; }
+    .checkbox-group .checkbox-label { display: inline-grid; }
     .form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 18px; }
     .upload-status { color: var(--muted); font-size: 13px; margin-right: auto; }
     .empty { border: 1px dashed rgba(68, 103, 154, .48); border-radius: 8px; padding: 30px; color: var(--muted); background: rgba(7, 8, 18, .28); }
@@ -723,6 +734,7 @@ function renderMessages(messages: MessageRecord[]): string {
     <td class="numeric">${message.cooldown_hours}h</td>
     <td class="numeric">${message.post_count}</td>
     <td class="numeric">${countGraphemes(message.body)}/300</td>
+    <td>${renderPlatforms(message.platforms)}</td>
     <td>${renderTags(message.tags)}</td>
     <td class="actions">
       <a class="action-button" href="/messages/${escapeHtml(message.id)}/edit">${icon('edit')}<span>Edit</span></a>
@@ -735,7 +747,7 @@ function renderMessages(messages: MessageRecord[]): string {
 
   return `<section class="content-panel">
     <div class="page-head"><div><h2>Messages</h2><p>Create, manage, and publish saved Bluesky posts.</p></div><a class="button primary" href="/messages/new">${icon('plus')}<span>New message</span></a></div>
-    <div class="section-body">${rows ? `<div class="table-wrap"><table><thead><tr><th>Message</th><th>Status</th><th>Weight</th><th>Cooldown</th><th>Posts</th><th>Length</th><th>Tags</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No saved messages yet.</div>'}</div>
+    <div class="section-body">${rows ? `<div class="table-wrap"><table><thead><tr><th>Message</th><th>Status</th><th>Weight</th><th>Cooldown</th><th>Posts</th><th>Length</th><th>Platforms</th><th>Tags</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No saved messages yet.</div>'}</div>
   </section>`;
 }
 
@@ -748,6 +760,8 @@ function renderMessageForm(action: string, assets: AssetRecord[], message?: Mess
   const assetRefNote = message?.image_asset_id && assetOtherRefCount != null && assetOtherRefCount > 0
     ? ` <span class="muted" title="Swapping or removing this asset will not affect other messages, but the asset may still be in use.">Used by ${assetOtherRefCount} other ${assetOtherRefCount === 1 ? 'message' : 'messages'}</span>`
     : '';
+
+  const selectedPlatforms = normalizePlatforms(message?.platforms);
 
   return `<section class="content-panel">
     <div class="page-head"><div><h2>${message ? 'Edit' : 'New'} message</h2><p>Approved messages enter the scheduler pool. Drafts and paused messages stay out of rotation.</p></div></div>
@@ -765,6 +779,12 @@ function renderMessageForm(action: string, assets: AssetRecord[], message?: Mess
           <label>Weight <input name="weight" type="number" min="1" value="${message?.weight ?? 100}"></label>
           <label>Cooldown hours <input name="cooldownHours" type="number" min="1" value="${message?.cooldown_hours ?? 168}"></label>
           <label>Tags <input name="tags" id="messageTags" value="${escapeHtml(message?.tags.join(', ') ?? '')}" placeholder="travel, photography"><small>Comma-separated words (no # needed). Appended as hashtags at the end of the post.</small></label>
+          <label class="full">Platforms
+            <span class="checkbox-group">
+              <label class="checkbox-label"><span><input type="checkbox" name="platforms" value="bluesky"${selectedPlatforms.includes('bluesky') ? ' checked' : ''}> Bluesky</span></label>
+              <label class="checkbox-label"><span><input type="checkbox" name="platforms" value="mastodon"${selectedPlatforms.includes('mastodon') ? ' checked' : ''}> Mastodon</span></label>
+            </span>
+          </label>
           <label class="full">Registered asset <select name="imageAssetId">${assetOptions}</select>${assetRefNote}</label>
           <label class="full">Image alt text <input name="imageAlt" value="${escapeHtml(message?.image_alt ?? '')}"></label>
         </div>
@@ -899,10 +919,10 @@ function renderSettings(settings: DashboardSettings): string {
 }
 
 function renderRuns(runs: DashboardRun[]): string {
-  const rows = runs.map((run) => `<tr><td>${renderBadge(run.status)}</td><td>${escapeHtml(run.message_id)}</td><td>${escapeHtml(formatDate(run.attempted_at))}</td><td>${escapeHtml(run.bsky_uri ?? '')}</td><td>${escapeHtml(run.error ?? '')}</td></tr>`).join('');
+  const rows = runs.map((run) => `<tr><td>${renderBadge(run.status)}</td><td>${renderBadge(platformLabel(run.platform), run.platform)}</td><td>${escapeHtml(run.message_id)}</td><td>${escapeHtml(formatDate(run.attempted_at))}</td><td>${escapeHtml(run.platform_url ?? run.platform_uri ?? run.bsky_uri ?? '')}</td><td>${escapeHtml(run.error ?? '')}</td></tr>`).join('');
   return `<section class="content-panel">
     <div class="page-head"><div><h2>Runs</h2><p>Every live attempt, dry run, and failure is recorded here for auditability.</p></div></div>
-    <div class="section-body">${rows ? `<div class="table-wrap"><table><thead><tr><th>Status</th><th>Message</th><th>Attempted</th><th>Bluesky URI</th><th>Error</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No scheduler attempts recorded yet.</div>'}</div>
+    <div class="section-body">${rows ? `<div class="table-wrap"><table><thead><tr><th>Status</th><th>Platform</th><th>Message</th><th>Attempted</th><th>Platform URL</th><th>Error</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No scheduler attempts recorded yet.</div>'}</div>
   </section>`;
 }
 
@@ -977,6 +997,15 @@ function renderBadge(label: string, className = label): string {
 function renderTags(tags: string[]): string {
   if (tags.length === 0) return '<span class="muted">-</span>';
   return `<div class="tag-list">${tags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}</div>`;
+}
+
+function renderPlatforms(platforms: PostingPlatform[]): string {
+  return `<div class="tag-list">${normalizePlatforms(platforms).map((platform) => `<span class="tag">${escapeHtml(platformLabel(platform))}</span>`).join('')}</div>`;
+}
+
+function platformLabel(platform: string): string {
+  if (platform === 'mastodon') return 'Mastodon';
+  return 'Bluesky';
 }
 
 function storageKindLabel(kind: AssetRecord['storage_kind']): string {

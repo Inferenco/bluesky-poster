@@ -1,10 +1,11 @@
 # Bluesky Poster Dashboard
 
-Private dashboard and worker for posting saved operator-authored messages to Bluesky at randomized intervals.
+Private dashboard and worker for posting saved operator-authored messages to Bluesky and optionally Mastodon at randomized intervals.
 
 The app is now shaped as a Node.js/TypeScript web service:
 
 - Fastify dashboard for creating, editing, approving, pausing, archiving, and deleting saved messages.
+- Per-message platform selection for Bluesky, Mastodon, or both.
 - Persistent scheduler that stores `next_run_at` in Postgres.
 - Saved-message poster path that records every attempt in `post_runs`.
 - Postgres-backed state and optional Postgres-backed image uploads, suitable for Replit Postgres, local Docker Postgres, or any hosted Postgres exposed through `DATABASE_URL`.
@@ -45,7 +46,10 @@ Use `/assets` to register reusable images. For Replit-friendly durability, uploa
 | `DASHBOARD_ADMIN_PASSWORD` | yes | Basic-auth password for the private dashboard. |
 | `BSKY_IDENTIFIER` | for live posting | Bluesky handle or identifier. |
 | `BSKY_APP_PASSWORD` | for live posting | Bluesky app password for the worker. |
-| `DRY_RUN` | no | Set `true` to record dry-run posts without calling Bluesky. |
+| `MASTODON_INSTANCE_URL` | no | Mastodon instance base URL. Defaults to `https://mastodon.social`. |
+| `MASTODON_ACCESS_TOKEN` | for Mastodon posting | Mastodon access token with `write:statuses` scope. |
+| `MASTODON_VISIBILITY` | no | Mastodon status visibility. Defaults to `public`. |
+| `DRY_RUN` | no | Set `true` to record dry-run posts without calling external posting APIs. |
 | `PORT` | no | Defaults to `3000`. |
 
 ## Commands
@@ -65,7 +69,7 @@ npm run start       # run compiled server
 
 Import the GitHub repo into Replit, attach Replit Postgres, and set Secrets for the variables above. The app expects Replit Postgres to provide `DATABASE_URL`; it does not rely on the published filesystem for dashboard or scheduler state.
 
-For production images on Replit, prefer dashboard uploads so image bytes are stored in Postgres. Repo-path assets are best for images committed to the repository.
+For production images on Replit, prefer dashboard uploads so image bytes are stored in Postgres/App Storage. Repo-path assets are best for images committed to the repository. Mastodon v1 does not upload media; if an attached asset has a public App Storage URL, that URL is appended to the Mastodon post text.
 
 Use a Reserved VM deployment for the dashboard plus continuous worker. Scheduled Deployments are not the target shape for this app.
 

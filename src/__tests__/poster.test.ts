@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { PosterService, type BlueskyPublisher, type RunRecorder } from '../services/poster.js';
+import { PosterService, type PlatformPublisher, type RunRecorder } from '../services/poster.js';
 import type { MessageRecord } from '../repositories/messages.js';
 
 const baseMessage: MessageRecord = {
@@ -11,6 +11,7 @@ const baseMessage: MessageRecord = {
   weight: 100,
   cooldown_hours: 168,
   tags: [],
+  platforms: ['bluesky'],
   self_labels: [],
   image_asset_id: null,
   image_path: null,
@@ -30,7 +31,8 @@ class FakeRuns implements RunRecorder {
   }
 }
 
-class FakePublisher implements BlueskyPublisher {
+class FakePublisher implements PlatformPublisher {
+  readonly platform = 'bluesky' as const;
   calls: MessageRecord[] = [];
 
   async publish(message: MessageRecord) {
@@ -72,6 +74,66 @@ describe('PosterService', () => {
     expect(result.status).toBe('dry_run');
     expect(publisher.calls).toHaveLength(0);
     expect(runs.records).toMatchObject([{ messageId: 'msg-1', status: 'dry_run' }]);
+  });
+
+  test('publishes to every selected platform and records one run per platform', async () => {
+    const runs = new FakeRuns();
+    const bluesky = new FakePublisher();
+    const mastodon: PlatformPublisher = {
+      platform: 'mastodon',
+      publish: async () => ({ uri: 'https://mastodon.social/@inferenco/1', cid: null, url: 'https://mastodon.social/@inferenco/1' })
+    };
+    const poster = new PosterService({ publishers: [bluesky, mastodon], runs, dryRun: false });
+
+    const result = await poster.publish({ ...baseMessage, platforms: ['bluesky', 'mastodon'] });
+
+    expect(result.status).toBe('success');
+    expect(bluesky.calls).toHaveLength(1);
+    expect(runs.records).toMatchObject([
+      { messageId: 'msg-1', platform: 'bluesky', status: 'success', bskyUri: 'at://did/app.bsky.feed.post/1' },
+      { messageId: 'msg-1', platform: 'mastodon', status: 'success', platformUri: 'https://mastodon.social/@inferenco/1', platformUrl: 'https://mastodon.social/@inferenco/1' }
+    ]);
+  });
+
+  test('records partial platform failure without failing the whole post when another platform succeeds', async () => {
+    const runs = new FakeRuns();
+    const bluesky = new FakePublisher();
+    const mastodon: PlatformPublisher = {
+      platform: 'mastodon',
+      publish: async () => {
+        throw new Error('Mastodon unavailable');
+      }
+    };
+    const poster = new PosterService({ publishers: [bluesky, mastodon], runs, dryRun: false });
+
+    const result = await poster.publish({ ...baseMessage, platforms: ['bluesky', 'mastodon'] });
+
+    expect(result.status).toBe('partial');
+    expect(runs.records).toMatchObject([
+      { messageId: 'msg-1', platform: 'bluesky', status: 'success' },
+      { messageId: 'msg-1', platform: 'mastodon', status: 'failed', error: 'Mastodon unavailable' }
+    ]);
+  });
+
+  test('records dry runs for each selected configured platform', async () => {
+    const runs = new FakeRuns();
+    const bluesky = new FakePublisher();
+    const mastodon: PlatformPublisher = {
+      platform: 'mastodon',
+      publish: async () => {
+        throw new Error('Mastodon must not be called in dry-run mode');
+      }
+    };
+    const poster = new PosterService({ publishers: [bluesky, mastodon], runs, dryRun: true });
+
+    const result = await poster.publish({ ...baseMessage, platforms: ['bluesky', 'mastodon'] });
+
+    expect(result.status).toBe('dry_run');
+    expect(bluesky.calls).toHaveLength(0);
+    expect(runs.records).toMatchObject([
+      { messageId: 'msg-1', platform: 'bluesky', status: 'dry_run' },
+      { messageId: 'msg-1', platform: 'mastodon', status: 'dry_run' }
+    ]);
   });
 
   test('rejects image paths with unsupported MIME extensions', async () => {

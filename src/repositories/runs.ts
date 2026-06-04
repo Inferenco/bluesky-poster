@@ -30,14 +30,17 @@ export class RunsRepository implements RunRecorder {
   async record(input: Parameters<RunRecorder['record']>[0]): Promise<void> {
     await this.db.query(
       `insert into post_runs (
-        id, message_id, status, bsky_uri, bsky_cid, http_status, error, retry_count
-      ) values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        id, message_id, platform, status, bsky_uri, bsky_cid, platform_uri, platform_url, http_status, error, retry_count
+      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
       [
         this.createId(),
         input.messageId,
+        input.platform ?? 'bluesky',
         input.status,
         input.bskyUri ?? null,
         input.bskyCid ?? null,
+        input.platformUri ?? null,
+        input.platformUrl ?? null,
         input.httpStatus ?? null,
         input.error ?? null,
         input.retryCount ?? 0

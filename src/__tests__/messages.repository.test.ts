@@ -22,6 +22,7 @@ describe('MessagesRepository', () => {
       weight: 100,
       cooldown_hours: 168,
       tags: [],
+      platforms: ['bluesky'],
       self_labels: [],
       image_asset_id: null,
       image_path: null,
@@ -42,6 +43,38 @@ describe('MessagesRepository', () => {
     expect(db.calls[0].values).toContain('msg-1');
     expect(db.calls[0].values).toContain(hashText('Hello Bluesky'));
     expect(message.status).toBe('draft');
+    expect(db.calls[0].values).toContain(JSON.stringify(['bluesky']));
+  });
+
+  test('creates a saved message with selected posting platforms', async () => {
+    const db = new FakeDb();
+    db.rows = [{
+      id: 'msg-1',
+      body: 'Hello everywhere',
+      status: 'approved',
+      weight: 100,
+      cooldown_hours: 168,
+      tags: [],
+      platforms: ['bluesky', 'mastodon'],
+      self_labels: [],
+      image_asset_id: null,
+      image_path: null,
+      image_alt: null,
+      normalised_hash: hashText('Hello everywhere'),
+      last_posted_at: null,
+      post_count: 0,
+      created_at: new Date('2026-05-29T10:00:00.000Z'),
+      updated_at: new Date('2026-05-29T10:00:00.000Z')
+    }];
+
+    const repo = new MessagesRepository(db, () => 'msg-1');
+    await repo.create({
+      body: 'Hello everywhere',
+      status: 'approved',
+      platforms: ['bluesky', 'mastodon']
+    });
+
+    expect(db.calls[0].values).toContain(JSON.stringify(['bluesky', 'mastodon']));
   });
 
   test('rejects saved messages over the Bluesky grapheme limit', async () => {
@@ -61,6 +94,7 @@ describe('MessagesRepository', () => {
       weight: 100,
       cooldown_hours: 168,
       tags: [],
+      platforms: ['bluesky', 'mastodon'],
       self_labels: [],
       image_asset_id: 'asset-1',
       image_path: 'assets/post.jpg',
@@ -79,8 +113,35 @@ describe('MessagesRepository', () => {
       imageAlt: null
     });
 
-    expect(db.calls[1].values[7]).toBeNull();
     expect(db.calls[1].values[8]).toBeNull();
     expect(db.calls[1].values[9]).toBeNull();
+    expect(db.calls[1].values[10]).toBeNull();
+  });
+
+  test('updates selected posting platforms', async () => {
+    const db = new FakeDb();
+    db.rows = [{
+      id: 'msg-1',
+      body: 'Hello Bluesky',
+      status: 'approved',
+      weight: 100,
+      cooldown_hours: 168,
+      tags: [],
+      platforms: ['bluesky'],
+      self_labels: [],
+      image_asset_id: null,
+      image_path: null,
+      image_alt: null,
+      normalised_hash: hashText('Hello Bluesky'),
+      last_posted_at: null,
+      post_count: 0,
+      created_at: new Date('2026-05-29T10:00:00.000Z'),
+      updated_at: new Date('2026-05-29T10:00:00.000Z')
+    }];
+    const repo = new MessagesRepository(db, () => 'msg-1');
+
+    await repo.update('msg-1', { platforms: ['mastodon'] });
+
+    expect(db.calls[1].values).toContain(JSON.stringify(['mastodon']));
   });
 });
