@@ -8,6 +8,7 @@ import { PgLockRepository } from './repositories/locks.js';
 import { MessagesRepository } from './repositories/messages.js';
 import { RunsRepository } from './repositories/runs.js';
 import { SettingsRepository } from './repositories/settings.js';
+import { OpenAIInferencoPostGenerator } from './services/postGenerator.js';
 import { PosterService } from './services/poster.js';
 import { SchedulerService } from './services/scheduler.js';
 
@@ -59,7 +60,13 @@ async function main(): Promise<void> {
       assets,
       settings,
       runs
-    }
+    },
+    postGenerator: config.ai.openaiApiKey
+      ? new OpenAIInferencoPostGenerator({
+          apiKey: config.ai.openaiApiKey,
+          model: config.ai.openaiPostModel
+        })
+      : undefined
   });
 
   await app.listen({ host: '0.0.0.0', port: config.port });

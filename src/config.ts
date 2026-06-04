@@ -12,6 +12,10 @@ export interface AppConfig {
     appPassword: string | null;
     serviceUrl: string;
   };
+  ai: {
+    openaiApiKey: string | null;
+    openaiPostModel: string;
+  };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -30,6 +34,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       identifier: env.BSKY_IDENTIFIER ?? env.BSKY_HANDLE ?? null,
       appPassword: env.BSKY_APP_PASSWORD ?? env.BSKY_PASSWORD ?? null,
       serviceUrl: env.BSKY_SERVICE_URL ?? 'https://bsky.social'
+    },
+    ai: {
+      openaiApiKey: env.OPENAI_API_KEY?.trim() || null,
+      openaiPostModel: env.OPENAI_POST_MODEL?.trim() || 'gpt-5.4-mini'
     }
   };
 }
