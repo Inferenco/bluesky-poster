@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.build.json && cp -r db dist/db",
+    "build": "tsc -p tsconfig.build.json && rm -rf dist/db && cp -r db dist/db",
     "start": "node dist/src/server.js",
     "db:migrate": "tsx src/db/migrate.ts",
     "bluesky:check": "tsx src/tools/check-bluesky-session.ts",
