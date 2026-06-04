@@ -1,0 +1,155 @@
+4 15:54:15.10
+80feaaea
+User
+(node:63) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
+
+
+2026-06-04 15:54:15.10
+80feaaea
+User
+See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+
+2026-06-04 15:54:15.27
+80feaaea
+User
+Fatal startup error: column "platform" does not exist
+
+2026-06-04 15:54:20.60
+80feaaea
+User
+- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
+
+2026-06-04 15:54:20.60
+80feaaea
+User
+(node:85) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
+
+2026-06-04 15:54:20.60
+80feaaea
+User
+See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+
+2026-06-04 15:54:20.60
+80feaaea
+User
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+2026-06-04 15:54:20.60
+80feaaea
+User
+To prepare for this change:
+
+2026-06-04 15:54:20.60
+80feaaea
+User
+- If you want the current behavior, explicitly use 'sslmode=verify-full'
+
+2026-06-04 15:54:20.60
+80feaaea
+User
+In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
+
+2026-06-04 15:54:20.77
+80feaaea
+User
+Fatal startup error: column "platform" does not exist
+
+2026-06-04 15:54:20.78
+80feaaea
+System
+command finished with error [node dist/src/server.js]: exit status 1
+
+2026-06-04 15:54:25.01
+80feaaea
+User
+- If you want the current behavior, explicitly use 'sslmode=verify-full'
+
+2026-06-04 15:54:25.01
+80feaaea
+User
+To prepare for this change:
+
+2026-06-04 15:54:25.01
+80feaaea
+User
+- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
+
+2026-06-04 15:54:25.01
+80feaaea
+User
+See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+
+2026-06-04 15:54:25.01
+80feaaea
+User
+In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
+
+2026-06-04 15:54:25.01
+80feaaea
+User
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+2026-06-04 15:54:25.01
+80feaaea
+User
+(node:96) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
+
+2026-06-04 15:54:25.18
+80feaaea
+User
+Fatal startup error: column "platform" does not exist
+
+2026-06-04 15:54:25.19
+80feaaea
+System
+command finished with error [node dist/src/server.js]: exit status 1
+
+2026-06-04 15:54:25.19
+80feaaea
+System
+command finished with error [node dist/src/server.js]: exit status 1
+
+2026-06-04 15:54:33.22
+80feaaea
+User
+In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
+
+2026-06-04 15:54:33.22
+80feaaea
+User
+- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
+
+2026-06-04 15:54:33.22
+80feaaea
+User
+See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+
+2026-06-04 15:54:33.22
+80feaaea
+User
+(node:107) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
+
+2026-06-04 15:54:33.22
+80feaaea
+User
+- If you want the current behavior, explicitly use 'sslmode=verify-full'
+
+2026-06-04 15:54:33.22
+80feaaea
+User
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+2026-06-04 15:54:33.22
+80feaaea
+User
+To prepare for this change:
+
+2026-06-04 15:54:33.39
+80feaaea
+User
+Fatal startup error: column "platform" does not exist
+
+2026-06-04 15:54:33.40
+80feaaea
+System
+command finished with error [node dist/src/server.js]: exit status 1
