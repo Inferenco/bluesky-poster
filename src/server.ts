@@ -3,6 +3,7 @@ import { buildApp } from './app.js';
 import { AtprotoBlueskyPublisher, getAgent } from './bluesky.js';
 import { loadConfig } from './config.js';
 import { createPool } from './db/client.js';
+import { migrate } from './db/migrate.js';
 import { MastodonPublisher } from './mastodon.js';
 import { AssetsRepository } from './repositories/assets.js';
 import { PgLockRepository } from './repositories/locks.js';
@@ -17,6 +18,7 @@ const SCHEDULER_POLL_MS = 15_000;
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  await migrate(config.databaseUrl);
   const pool = createPool(config.databaseUrl);
   const messages = new MessagesRepository(pool);
   const assets = new AssetsRepository(pool);
