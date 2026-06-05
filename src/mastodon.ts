@@ -1,5 +1,6 @@
 import type { MastodonVisibility } from './config.js';
 import type { MessageRecord } from './repositories/messages.js';
+import { downloadObject } from './replit_integrations/object_storage.js';
 import type { PlatformPublisher } from './services/poster.js';
 
 export interface MastodonPublisherOptions {
@@ -29,8 +30,8 @@ export class MastodonPublisher implements PlatformPublisher {
   }
 
   async publish(message: MessageRecord): Promise<{ uri: string | null; cid: string | null; url: string | null }> {
-    const mediaId = message.image_public_url
-      ? await this.uploadPublicMedia(message)
+    const mediaId = hasUploadableMedia(message)
+      ? await this.uploadMedia(message)
       : null;
     const body = new URLSearchParams();
     body.set('status', buildMastodonStatus(message));
@@ -57,17 +58,10 @@ export class MastodonPublisher implements PlatformPublisher {
     return { uri, cid: null, url };
   }
 
-  private async uploadPublicMedia(message: MessageRecord): Promise<string> {
-    const mediaUrl = message.image_public_url ?? '';
-    const mediaResponse = await this.fetcher(mediaUrl);
-    if (!mediaResponse.ok) {
-      throw new Error(`Failed to fetch Mastodon media: ${mediaResponse.status}`);
-    }
-
-    const contentType = mediaResponse.headers.get('content-type') ?? 'application/octet-stream';
-    const data = await mediaResponse.arrayBuffer();
+  private async uploadMedia(message: MessageRecord): Promise<string> {
+    const media = await loadMedia(message, this.fetcher);
     const form = new FormData();
-    form.set('file', new File([new Blob([data], { type: contentType })], fileNameFromUrl(mediaUrl), { type: contentType }));
+    form.set('file', new File([new Blob([media.data], { type: media.contentType })], media.fileName, { type: media.contentType }));
     if (message.image_alt?.trim()) {
       form.set('description', message.image_alt.trim());
     }
@@ -92,6 +86,33 @@ export class MastodonPublisher implements PlatformPublisher {
   }
 }
 
+function hasUploadableMedia(message: MessageRecord): boolean {
+  return Boolean(message.image_object_key || message.image_public_url);
+}
+
+async function loadMedia(message: MessageRecord, fetcher: typeof fetch): Promise<{ data: Buffer; contentType: string; fileName: string }> {
+  if (message.image_object_key) {
+    const data = await downloadObject(message.image_object_key);
+    return {
+      data,
+      contentType: message.image_mime_type ?? 'application/octet-stream',
+      fileName: fileNameFromPath(message.image_object_key)
+    };
+  }
+
+  const mediaUrl = message.image_public_url ?? '';
+  const mediaResponse = await fetcher(mediaUrl);
+  if (!mediaResponse.ok) {
+    throw new Error(`Failed to fetch Mastodon media: ${mediaResponse.status}`);
+  }
+
+  return {
+    data: Buffer.from(await mediaResponse.arrayBuffer()),
+    contentType: mediaResponse.headers.get('content-type') ?? message.image_mime_type ?? 'application/octet-stream',
+    fileName: fileNameFromUrl(mediaUrl)
+  };
+}
+
 function buildMastodonStatus(message: MessageRecord): string {
   const tags = message.tags.slice(0, 8).filter(Boolean);
   const tagSuffix = tags.length > 0 ? '\n\n' + tags.map((tag) => `#${tag}`).join(' ') : '';
@@ -106,6 +127,11 @@ function fileNameFromUrl(rawUrl: string): string {
   } catch {
     return 'mastodon-media';
   }
+}
+
+function fileNameFromPath(rawPath: string): string {
+  const name = rawPath.split('/').filter(Boolean).at(-1);
+  return name || 'mastodon-media';
 }
 
 async function mastodonErrorMessage(response: Response): Promise<string> {

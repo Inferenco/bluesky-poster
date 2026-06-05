@@ -1,6 +1,11 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { MastodonPublisher } from '../mastodon.js';
 import type { MessageRecord } from '../repositories/messages.js';
+import { downloadObject } from '../replit_integrations/object_storage.js';
+
+vi.mock('../replit_integrations/object_storage.js', () => ({
+  downloadObject: vi.fn()
+}));
 
 const baseMessage: MessageRecord = {
   id: 'msg-1',
@@ -85,6 +90,51 @@ describe('MastodonPublisher', () => {
       cid: null,
       url: 'https://mastodon.social/@inferenco/123'
     });
+  });
+
+  test('uploads object storage media through the signed download path instead of the public URL', async () => {
+    vi.mocked(downloadObject).mockResolvedValueOnce(Buffer.from('private-image'));
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const publisher = new MastodonPublisher({
+      instanceUrl: 'https://mastodon.social/',
+      accessToken: 'mastodon-token',
+      visibility: 'unlisted',
+      fetcher: async (url, init) => {
+        calls.push({ url: String(url), init: init ?? {} });
+        if (String(url) === 'https://storage.googleapis.com/bucket/uploads/post.png') {
+          return new Response('forbidden', { status: 403 });
+        }
+        if (String(url) === 'https://mastodon.social/api/v2/media') {
+          return new Response(JSON.stringify({ id: 'media-123' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+          });
+        }
+        return new Response(JSON.stringify({
+          uri: 'https://mastodon.social/users/inferenco/statuses/123',
+          url: 'https://mastodon.social/@inferenco/123'
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+    });
+
+    await publisher.publish({
+      ...baseMessage,
+      image_alt: 'A generated image',
+      image_mime_type: 'image/png',
+      image_object_key: 'uploads/post.png',
+      image_public_url: 'https://storage.googleapis.com/bucket/uploads/post.png'
+    });
+
+    expect(downloadObject).toHaveBeenCalledWith('uploads/post.png');
+    expect(calls.map((call) => call.url)).toEqual([
+      'https://mastodon.social/api/v2/media',
+      'https://mastodon.social/api/v1/statuses'
+    ]);
+    const mediaForm = calls[0].init.body as FormData;
+    const file = mediaForm.get('file') as File;
+    expect(file.name).toBe('post.png');
+    expect(file.type).toBe('image/png');
+    expect(mediaForm.get('description')).toBe('A generated image');
   });
 
   test('posts text only when no public image URL is available', async () => {
