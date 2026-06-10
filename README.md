@@ -47,7 +47,7 @@ Use `/assets` to register reusable images. For Replit-friendly durability, uploa
 | `BSKY_IDENTIFIER` | for live posting | Bluesky handle or identifier. |
 | `BSKY_APP_PASSWORD` | for live posting | Bluesky app password for the worker. |
 | `MASTODON_INSTANCE_URL` | no | Mastodon instance base URL. Defaults to `https://mastodon.social`. |
-| `MASTODON_ACCESS_TOKEN` | for Mastodon posting | Mastodon access token with `write:statuses` scope. |
+| `MASTODON_ACCESS_TOKEN` | for Mastodon posting | Mastodon access token with `write:statuses` and `write:media` scopes. |
 | `MASTODON_VISIBILITY` | no | Mastodon status visibility. Defaults to `public`. |
 | `DRY_RUN` | no | Set `true` to record dry-run posts without calling external posting APIs. |
 | `PORT` | no | Defaults to `3000`. |
@@ -69,7 +69,7 @@ npm run start       # run compiled server
 
 Import the GitHub repo into Replit, attach Replit Postgres, and set Secrets for the variables above. The app expects Replit Postgres to provide `DATABASE_URL`; it does not rely on the published filesystem for dashboard or scheduler state.
 
-For production images on Replit, prefer dashboard uploads so image bytes are stored in Postgres/App Storage. Repo-path assets are best for images committed to the repository. Mastodon v1 does not upload media; if an attached asset has a public App Storage URL, that URL is appended to the Mastodon post text.
+For production images on Replit, prefer dashboard uploads so image bytes are stored in Postgres/App Storage. Repo-path assets are best for images committed to the repository. Mastodon uploads attached App Storage media through the app's signed storage download path before creating the status.
 
 Use a Reserved VM deployment for the dashboard plus continuous worker. Scheduled Deployments are not the target shape for this app.
 

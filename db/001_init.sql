@@ -61,7 +61,6 @@ create table if not exists post_runs (
 create index if not exists post_runs_message_id_idx on post_runs (message_id);
 create index if not exists post_runs_attempted_at_idx on post_runs (attempted_at desc);
 create index if not exists post_runs_status_idx on post_runs (status);
-create index if not exists post_runs_platform_idx on post_runs (platform);
 
 create table if not exists scheduler_state (
   singleton_key text primary key,
