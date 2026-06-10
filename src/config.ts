@@ -2,10 +2,12 @@ export interface AppConfig {
   databaseUrl: string;
   port: number;
   dryRun: boolean;
-  dashboard: {
-    user: string | null;
-    password: string | null;
-    allowedReplitUsers: string[];
+  auth: {
+    cedraFullnodeUrl: string;
+    adminContractAddress: string;
+    adminCacheTtlMs: number;
+    adminViewTimeoutMs: number;
+    secureCookies: boolean;
   };
   bluesky: {
     identifier: string | null;
@@ -32,10 +34,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     databaseUrl,
     port: parsePort(env.PORT),
     dryRun: asBoolean(env.DRY_RUN),
-    dashboard: {
-      user: env.DASHBOARD_ADMIN_USER?.trim() || null,
-      password: env.DASHBOARD_ADMIN_PASSWORD?.trim() || null,
-      allowedReplitUsers: parseStringList(env.DASHBOARD_ALLOWED_REPLIT_USERS)
+    auth: {
+      cedraFullnodeUrl: env.CEDRA_FULLNODE_URL?.trim() || 'https://testnet.cedra.dev/v1',
+      adminContractAddress:
+        env.ADMIN_CONTRACT_ADDRESS?.trim() ||
+        '0xbdf9c94e797716648980ed99a0c6e2b3d6452ce5c1d28dbad3517a9be682b724',
+      adminCacheTtlMs: parsePositiveInt(env.ADMIN_CACHE_TTL_MS, 60_000),
+      adminViewTimeoutMs: parsePositiveInt(env.ADMIN_VIEW_TIMEOUT_MS, 5_000),
+      secureCookies: env.COOKIE_SECURE === undefined ? true : asBoolean(env.COOKIE_SECURE)
     },
     bluesky: {
       identifier: env.BSKY_IDENTIFIER ?? env.BSKY_HANDLE ?? null,
@@ -75,9 +81,13 @@ function asBoolean(raw: string | undefined): boolean {
   return ['1', 'true', 'yes', 'on'].includes(String(raw ?? '').toLowerCase());
 }
 
-function parseStringList(raw: string | undefined): string[] {
-  if (!raw?.trim()) return [];
-  return raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+function parsePositiveInt(raw: string | undefined, fallback: number): number {
+  if (!raw?.trim()) return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error('Expected a positive integer');
+  }
+  return value;
 }
 
 function normalizeOptionalUrl(raw: string | undefined): string | null {

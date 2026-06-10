@@ -1,7 +1,9 @@
 import { vi, describe, expect, test } from 'vitest';
 import FormData from 'form-data';
 import sharp from 'sharp';
+import type { FastifyInstance } from 'fastify';
 import { buildApp, type AppRepositories } from '../app.js';
+import type { SignatureVerifier } from '../auth/cedraAuth.js';
 import type { AssetRecord } from '../repositories/assets.js';
 import type { MessageRecord, MessageStatus } from '../repositories/messages.js';
 import type { PostGenerator } from '../services/postGenerator.js';
@@ -14,10 +16,66 @@ vi.mock('../replit_integrations/object_storage.js', () => ({
   downloadObject: vi.fn().mockResolvedValue(Buffer.from('preview-bytes'))
 }));
 
-const authHeaders = {
-  'x-replit-user-id': 'user-1',
-  'x-replit-user-name': 'admin'
+const ADMIN_ADDRESS = '0xbdf9c94e797716648980ed99a0c6e2b3d6452ce5c1d28dbad3517a9be682b724';
+
+const testConfig = {
+  auth: {
+    cedraFullnodeUrl: 'http://unused.example',
+    adminContractAddress: '0x1',
+    adminCacheTtlMs: 60_000,
+    adminViewTimeoutMs: 5_000,
+    secureCookies: false
+  }
 };
+
+function extractSessionCookie(setCookie: string | string[] | undefined): string | null {
+  if (!setCookie) return null;
+  const raw = Array.isArray(setCookie) ? setCookie[0] : setCookie;
+  return raw.split(';')[0];
+}
+
+async function loginCookie(app: FastifyInstance, address = ADMIN_ADDRESS): Promise<string> {
+  const nonceRes = await app.inject({ method: 'GET', url: '/api/auth/nonce' });
+  const cookie = extractSessionCookie(nonceRes.headers['set-cookie']);
+  if (!cookie) throw new Error('nonce response did not set a session cookie');
+  const { nonce } = nonceRes.json() as { nonce: string };
+  const verifyRes = await app.inject({
+    method: 'POST',
+    url: '/api/auth/verify',
+    headers: { cookie, 'content-type': 'application/json' },
+    payload: {
+      address,
+      publicKey: '0x' + '00'.repeat(32),
+      signature: '0x' + '00'.repeat(64),
+      message: 'test',
+      nonce,
+      fullMessage: 'test'
+    }
+  });
+  if (verifyRes.statusCode !== 200) {
+    throw new Error(`login failed with ${verifyRes.statusCode}: ${verifyRes.body}`);
+  }
+  return extractSessionCookie(verifyRes.headers['set-cookie']) ?? cookie;
+}
+
+async function makeApp(opts: {
+  repositories?: AppRepositories;
+  postGenerator?: PostGenerator;
+  admins?: string[];
+  verifySignature?: SignatureVerifier;
+} = {}): Promise<{ app: FastifyInstance; authHeaders: { cookie: string } }> {
+  const app = await buildApp({
+    config: testConfig,
+    repositories: opts.repositories ?? repositories(),
+    postGenerator: opts.postGenerator,
+    auth: {
+      fetchAdmins: async () => opts.admins ?? [ADMIN_ADDRESS],
+      verifySignature: opts.verifySignature ?? (() => true)
+    }
+  });
+  const authHeaders = { cookie: await loginCookie(app) };
+  return { app, authHeaders };
+}
 
 function makeMessage(overrides: Partial<MessageRecord> = {}): MessageRecord {
   return {
@@ -158,16 +216,156 @@ function repositories(): AppRepositories {
   };
 }
 
+describe('wallet authentication', () => {
+  test('unauthenticated dashboard requests get the wallet login page', async () => {
+    const app = await buildApp({ config: testConfig, repositories: repositories() });
+
+    const response = await app.inject({ method: 'GET', url: '/messages' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain('Connect your Cedra wallet');
+    expect(response.body).toContain('/public/login.js');
+    expect(response.body).toContain('Inferenco Poster');
+    await app.close();
+  });
+
+  test('rejects verification when the signature is invalid', async () => {
+    const app = await buildApp({
+      config: testConfig,
+      repositories: repositories(),
+      auth: { fetchAdmins: async () => [ADMIN_ADDRESS], verifySignature: () => false }
+    });
+
+    await expect(loginCookie(app)).rejects.toThrow('login failed with 401');
+    await app.close();
+  });
+
+  test('rejects wallets that are not contract admins', async () => {
+    const app = await buildApp({
+      config: testConfig,
+      repositories: repositories(),
+      auth: { fetchAdmins: async () => ['0x2'], verifySignature: () => true }
+    });
+
+    await expect(loginCookie(app)).rejects.toThrow('login failed with 403');
+    await app.close();
+  });
+
+  test('reports admin lookup failures during verification', async () => {
+    const app = await buildApp({
+      config: testConfig,
+      repositories: repositories(),
+      auth: {
+        fetchAdmins: async () => {
+          throw new Error('fullnode unavailable');
+        },
+        verifySignature: () => true
+      }
+    });
+
+    await expect(loginCookie(app)).rejects.toThrow('login failed with 502');
+    await app.close();
+  });
+
+  test('rejects verification without a prior nonce', async () => {
+    const app = await buildApp({
+      config: testConfig,
+      repositories: repositories(),
+      auth: { fetchAdmins: async () => [ADMIN_ADDRESS], verifySignature: () => true }
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/auth/verify',
+      headers: { 'content-type': 'application/json' },
+      payload: {
+        address: ADMIN_ADDRESS,
+        publicKey: '0x00',
+        signature: '0x00',
+        message: 'test',
+        nonce: 'whatever',
+        fullMessage: 'test'
+      }
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: 'nonce_expired' });
+    await app.close();
+  });
+
+  test('nonce is single-use', async () => {
+    const { app, authHeaders } = await makeApp();
+
+    // The login consumed the nonce; replaying verify on the same session fails.
+    const replay = await app.inject({
+      method: 'POST',
+      url: '/api/auth/verify',
+      headers: { ...authHeaders, 'content-type': 'application/json' },
+      payload: {
+        address: ADMIN_ADDRESS,
+        publicKey: '0x00',
+        signature: '0x00',
+        message: 'test',
+        nonce: 'stale',
+        fullMessage: 'test'
+      }
+    });
+
+    expect(replay.statusCode).toBe(401);
+    await app.close();
+  });
+
+  test('admin address comparison is normalization-aware', async () => {
+    // Admin list holds the long form; the wallet reports a short form.
+    const app = await buildApp({
+      config: testConfig,
+      repositories: repositories(),
+      auth: { fetchAdmins: async () => ['0x' + '0'.repeat(63) + '1'], verifySignature: () => true }
+    });
+    const cookie = await loginCookie(app, '0x1');
+    expect(cookie).toBeTruthy();
+    await app.close();
+  });
+
+  test('logout destroys the session', async () => {
+    const { app, authHeaders } = await makeApp();
+
+    const logout = await app.inject({ method: 'GET', url: '/api/logout', headers: authHeaders });
+    expect(logout.statusCode).toBe(302);
+
+    const after = await app.inject({ method: 'GET', url: '/messages', headers: authHeaders });
+    expect(after.body).toContain('Connect your Cedra wallet');
+    await app.close();
+  });
+
+  test('a session loses access when the wallet is removed from the admin list', async () => {
+    let admins = [ADMIN_ADDRESS];
+    const app = await buildApp({
+      config: testConfig,
+      repositories: repositories(),
+      auth: { fetchAdmins: async () => admins, verifySignature: () => true }
+    });
+    const authHeaders = { cookie: await loginCookie(app) };
+
+    const before = await app.inject({ method: 'GET', url: '/messages', headers: authHeaders });
+    expect(before.statusCode).toBe(200);
+    expect(before.body).not.toContain('Connect your Cedra wallet');
+
+    admins = [];
+    const after = await app.inject({ method: 'GET', url: '/messages', headers: authHeaders });
+    expect(after.statusCode).toBe(403);
+    expect(after.body).toContain('not an admin');
+    await app.close();
+  });
+});
+
 describe('dashboard routes', () => {
   test('readiness reports database repository failures', async () => {
     const repos = repositories();
     repos.settings.getDashboardSettings = async () => {
       throw new Error('database unavailable');
     };
-    const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
-      repositories: repos
-    });
+    const app = await buildApp({ config: testConfig, repositories: repos });
 
     const response = await app.inject({ method: 'GET', url: '/readyz' });
 
@@ -176,26 +374,9 @@ describe('dashboard routes', () => {
     await app.close();
   });
 
-  test('requires Replit authentication for dashboard pages', async () => {
-    const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
-      repositories: repositories()
-    });
-
-    const response = await app.inject({ method: 'GET', url: '/messages' });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toContain('Sign in with your Replit account');
-    expect(response.body).toContain('Inferenco Poster');
-    await app.close();
-  });
-
   test('creates, edits, pauses, and renders branded messages', async () => {
     const repos = repositories();
-    const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
-      repositories: repos
-    });
+    const { app, authHeaders } = await makeApp({ repositories: repos });
 
     const created = await app.inject({
       method: 'POST',
@@ -233,10 +414,7 @@ describe('dashboard routes', () => {
 
   test('renders platform checkboxes and defaults new messages to Bluesky', async () => {
     const repos = repositories();
-    const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
-      repositories: repos
-    });
+    const { app, authHeaders } = await makeApp({ repositories: repos });
 
     const form = await app.inject({ method: 'GET', url: '/messages/new', headers: authHeaders });
     expect(form.body).toContain('name="platforms" value="bluesky" checked');
@@ -255,10 +433,7 @@ describe('dashboard routes', () => {
   });
 
   test('registers assets and offers them on message forms', async () => {
-    const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
-      repositories: repositories()
-    });
+    const { app, authHeaders } = await makeApp();
 
     const created = await app.inject({
       method: 'POST',
@@ -292,11 +467,7 @@ describe('dashboard routes', () => {
         tags: ['Inferenco', 'AI', 'Web3']
       })
     };
-    const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
-      repositories: repositories(),
-      postGenerator: generator
-    });
+    const { app, authHeaders } = await makeApp({ postGenerator: generator });
 
     const response = await app.inject({
       method: 'POST',
@@ -316,7 +487,7 @@ describe('dashboard routes', () => {
     await app.close();
   });
 
-  test('requires Replit authentication before generating AI suggestions', async () => {
+  test('requires wallet authentication before generating AI suggestions', async () => {
     const generator: PostGenerator = {
       generate: async () => ({
         body: 'This should not be generated for anonymous users.',
@@ -324,7 +495,7 @@ describe('dashboard routes', () => {
       })
     };
     const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
+      config: testConfig,
       repositories: repositories(),
       postGenerator: generator
     });
@@ -335,16 +506,13 @@ describe('dashboard routes', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toContain('Sign in with your Replit account');
+    expect(response.body).toContain('Connect your Cedra wallet');
 
     await app.close();
   });
 
   test('returns a clear AI configuration error when no generator is configured', async () => {
-    const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
-      repositories: repositories()
-    });
+    const { app, authHeaders } = await makeApp();
 
     const response = await app.inject({
       method: 'POST',
@@ -359,10 +527,7 @@ describe('dashboard routes', () => {
   });
 
   test('updates scheduler settings', async () => {
-    const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
-      repositories: repositories()
-    });
+    const { app, authHeaders } = await makeApp();
 
     const response = await app.inject({
       method: 'POST',
@@ -392,10 +557,7 @@ describe('dashboard routes', () => {
       updateCalls += 1;
       return originalUpdate(input);
     };
-    const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
-      repositories: repos
-    });
+    const { app, authHeaders } = await makeApp({ repositories: repos });
 
     const response = await app.inject({
       method: 'POST',
@@ -412,10 +574,7 @@ describe('dashboard routes', () => {
 
   test('blocks asset deletion when messages still reference it', async () => {
     const repos = repositories();
-    const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
-      repositories: repos
-    });
+    const { app, authHeaders } = await makeApp({ repositories: repos });
 
     const createdAsset = await app.inject({
       method: 'POST',
@@ -452,10 +611,7 @@ describe('dashboard routes', () => {
 
   test('deletes an asset when no messages reference it', async () => {
     const repos = repositories();
-    const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
-      repositories: repos
-    });
+    const { app, authHeaders } = await makeApp({ repositories: repos });
 
     const createdAsset = await app.inject({
       method: 'POST',
@@ -500,10 +656,7 @@ describe('dashboard routes', () => {
         registeredInput = input;
         return original(input);
       };
-      const app = await buildApp({
-        config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
-        repositories: repos
-      });
+      const { app, authHeaders } = await makeApp({ repositories: repos });
 
       const imageBuffer = await makeValidImageBuffer();
       const form = new FormData();
@@ -539,10 +692,7 @@ describe('dashboard routes', () => {
     });
 
     test('returns 400 when no file is included', async () => {
-      const app = await buildApp({
-        config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
-        repositories: repositories()
-      });
+      const { app, authHeaders } = await makeApp();
 
       const form = new FormData();
       form.append('altTextDefault', 'Some alt text');
@@ -561,10 +711,7 @@ describe('dashboard routes', () => {
     });
 
     test('returns 400 when alt text is missing', async () => {
-      const app = await buildApp({
-        config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
-        repositories: repositories()
-      });
+      const { app, authHeaders } = await makeApp();
 
       const imageBuffer = await makeValidImageBuffer();
       const form = new FormData();
@@ -584,10 +731,7 @@ describe('dashboard routes', () => {
     });
 
     test('returns 400 when file has a non-image MIME type', async () => {
-      const app = await buildApp({
-        config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
-        repositories: repositories()
-      });
+      const { app, authHeaders } = await makeApp();
 
       const form = new FormData();
       form.append('altTextDefault', 'A document');
@@ -610,10 +754,7 @@ describe('dashboard routes', () => {
     });
 
     test('returns 400 when file exceeds the 2 MB size limit', async () => {
-      const app = await buildApp({
-        config: { dashboard: { user: 'admin', password: 'secret', allowedReplitUsers: [] } },
-        repositories: repositories()
-      });
+      const { app, authHeaders } = await makeApp();
 
       const oversizedBuffer = Buffer.alloc(2_100_000, 0xff);
       const form = new FormData();
