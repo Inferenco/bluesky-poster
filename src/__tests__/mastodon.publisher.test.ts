@@ -137,7 +137,7 @@ describe('MastodonPublisher', () => {
     expect(mediaForm.get('description')).toBe('A generated image');
   });
 
-  test('posts text only when no public image URL is available', async () => {
+  test('uploads database-backed image content before posting', async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const publisher = new MastodonPublisher({
       instanceUrl: 'https://mastodon.social',
@@ -145,6 +145,9 @@ describe('MastodonPublisher', () => {
       visibility: 'public',
       fetcher: async (url, init) => {
         calls.push({ url: String(url), init: init ?? {} });
+        if (String(url) === 'https://mastodon.social/api/v2/media') {
+          return new Response(JSON.stringify({ id: 'media-db-1' }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
         return new Response(JSON.stringify({
           uri: 'https://mastodon.social/users/inferenco/statuses/124',
           url: 'https://mastodon.social/@inferenco/124'
@@ -159,11 +162,16 @@ describe('MastodonPublisher', () => {
       image_alt: 'Local image'
     });
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe('https://mastodon.social/api/v1/statuses');
-    const statusForm = calls[0].init.body as URLSearchParams;
+    expect(calls).toHaveLength(2);
+    expect(calls[0].url).toBe('https://mastodon.social/api/v2/media');
+    expect(calls[0].init.body).toBeInstanceOf(FormData);
+    const mediaForm = calls[0].init.body as FormData;
+    expect(mediaForm.get('description')).toBe('Local image');
+
+    expect(calls[1].url).toBe('https://mastodon.social/api/v1/statuses');
+    const statusForm = calls[1].init.body as URLSearchParams;
     expect(statusForm.get('status')).toBe('Hello Mastodon\n\n#Inferenco #AI');
-    expect(statusForm.get('media_ids[]')).toBeNull();
+    expect(statusForm.get('media_ids[]')).toBe('media-db-1');
   });
 
   test('fails before posting when the public image URL cannot be fetched', async () => {

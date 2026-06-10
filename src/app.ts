@@ -7,10 +7,10 @@ import cookie from '@fastify/cookie';
 import session from '@fastify/session';
 import sharp from 'sharp';
 import type { AppConfig } from './config.js';
-import type { AssetRecord, RegisterLocalImageInput, RegisterObjectStorageImageInput } from './repositories/assets.js';
+import type { AssetRecord, RegisterImageBufferInput, RegisterLocalImageInput, RegisterObjectStorageImageInput } from './repositories/assets.js';
 import { normalizePlatforms, type CreateMessageInput, type MessageRecord, type MessageStatus, type PostingPlatform } from './repositories/messages.js';
 import { countGraphemes } from './validate.js';
-import { downloadObject, uploadBuffer } from './replit_integrations/object_storage.js';
+import { downloadObject } from './replit_integrations/object_storage.js';
 import type { PostGenerator } from './services/postGenerator.js';
 import fastifyStatic from '@fastify/static';
 import {
@@ -26,6 +26,8 @@ import {
   type VerifyInput,
 } from './auth/cedraAuth.js';
 
+const ASSET_LIBRARY_LIMIT = 25;
+
 export interface AppRepositories {
   messages: {
     list(): Promise<MessageRecord[]>;
@@ -40,6 +42,7 @@ export interface AppRepositories {
     list(): Promise<AssetRecord[]>;
     get(id: string): Promise<AssetRecord | null>;
     registerLocalImage(input: RegisterLocalImageInput): Promise<AssetRecord>;
+    registerImageBuffer(input: RegisterImageBufferInput): Promise<AssetRecord>;
     registerObjectStorageImage(input: RegisterObjectStorageImageInput): Promise<AssetRecord>;
     delete(id: string): Promise<void>;
   };
@@ -352,6 +355,11 @@ export async function buildApp(options: {
   });
 
   app.post('/assets/upload-multipart', { preHandler: requireAuth }, async (request, reply) => {
+    const existingAssets = await options.repositories.assets.list();
+    if (existingAssets.length >= ASSET_LIBRARY_LIMIT) {
+      return reply.code(400).send({ error: `Asset library is limited to ${ASSET_LIBRARY_LIMIT} images` });
+    }
+
     let fileBuffer: Buffer | null = null;
     let fileName = '';
     let mimeType = '';
@@ -398,15 +406,10 @@ export async function buildApp(options: {
     }
 
     try {
-      const { objectKey, publicUrl } = await uploadBuffer(fileName, fileBuffer, mimeType);
-      await options.repositories.assets.registerObjectStorageImage({
-        objectKey,
-        publicUrl,
-        mimeType,
+      await options.repositories.assets.registerImageBuffer({
+        fileName,
+        content: fileBuffer,
         altTextDefault,
-        width: metadata.width,
-        height: metadata.height,
-        bytes: fileBuffer.length,
       });
     } catch (err) {
       return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });

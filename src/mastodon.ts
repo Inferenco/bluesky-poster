@@ -2,6 +2,8 @@ import type { MastodonVisibility } from './config.js';
 import type { MessageRecord } from './repositories/messages.js';
 import { downloadObject } from './replit_integrations/object_storage.js';
 import type { PlatformPublisher } from './services/poster.js';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 export interface MastodonPublisherOptions {
   instanceUrl: string;
@@ -87,7 +89,7 @@ export class MastodonPublisher implements PlatformPublisher {
 }
 
 function hasUploadableMedia(message: MessageRecord): boolean {
-  return Boolean(message.image_object_key || message.image_public_url);
+  return Boolean(message.image_object_key || message.image_public_url || message.image_content || message.image_path);
 }
 
 async function loadMedia(message: MessageRecord, fetcher: typeof fetch): Promise<{ data: Buffer; contentType: string; fileName: string }> {
@@ -97,6 +99,23 @@ async function loadMedia(message: MessageRecord, fetcher: typeof fetch): Promise
       data,
       contentType: message.image_mime_type ?? 'application/octet-stream',
       fileName: fileNameFromPath(message.image_object_key)
+    };
+  }
+
+  if (message.image_content) {
+    return {
+      data: message.image_content,
+      contentType: message.image_mime_type ?? 'application/octet-stream',
+      fileName: 'postgres-image'
+    };
+  }
+
+  if (message.image_path) {
+    const resolvedPath = path.resolve(process.cwd(), message.image_path);
+    return {
+      data: await fs.readFile(resolvedPath),
+      contentType: message.image_mime_type ?? 'application/octet-stream',
+      fileName: fileNameFromPath(message.image_path)
     };
   }
 

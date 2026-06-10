@@ -180,6 +180,23 @@ function repositories(): AppRepositories {
         assets.set(asset.id, asset);
         return asset;
       },
+      registerImageBuffer: async (input) => {
+        const asset: AssetRecord = {
+          id: `asset-${assets.size + 1}`,
+          storage_kind: 'database',
+          path_or_object_key: null,
+          public_url: null,
+          content: input.content,
+          mime_type: 'image/png',
+          width: 10,
+          height: 10,
+          bytes: input.content.length,
+          alt_text_default: input.altTextDefault,
+          created_at: new Date('2026-05-29T10:00:00.000Z')
+        };
+        assets.set(asset.id, asset);
+        return asset;
+      },
       registerObjectStorageImage: async (input) => {
         const asset: AssetRecord = {
           id: `asset-${assets.size + 1}`,
@@ -648,11 +665,11 @@ describe('dashboard routes', () => {
         .toBuffer();
     }
 
-    test('happy path: valid image and alt text returns 200 ok and registers asset', async () => {
+    test('happy path: valid image and alt text returns 200 ok and stores asset in Postgres', async () => {
       const repos = repositories();
-      let registeredInput: Parameters<typeof repos.assets.registerObjectStorageImage>[0] | null = null;
-      const original = repos.assets.registerObjectStorageImage;
-      repos.assets.registerObjectStorageImage = async (input) => {
+      let registeredInput: import('../repositories/assets.js').RegisterImageBufferInput | null = null;
+      const original = repos.assets.registerImageBuffer;
+      repos.assets.registerImageBuffer = async (input) => {
         registeredInput = input;
         return original(input);
       };
@@ -674,10 +691,8 @@ describe('dashboard routes', () => {
       expect(response.json()).toEqual({ ok: true });
       expect(registeredInput).not.toBeNull();
       expect(registeredInput!.altTextDefault).toBe('A blue square');
-      expect(registeredInput!.mimeType).toBe('image/png');
-      expect(registeredInput!.width).toBe(10);
-      expect(registeredInput!.height).toBe(10);
-      expect(registeredInput!.objectKey).toBe('uploads/test-uuid.png');
+      expect(registeredInput!.fileName).toBe('test.png');
+      expect(registeredInput!.content.equals(imageBuffer)).toBe(true);
 
       const assetList = await app.inject({ method: 'GET', url: '/assets', headers: authHeaders });
       expect(assetList.body).toContain('src="/assets/asset-1/preview"');
@@ -686,7 +701,35 @@ describe('dashboard routes', () => {
       const preview = await app.inject({ method: 'GET', url: '/assets/asset-1/preview', headers: authHeaders });
       expect(preview.statusCode).toBe(200);
       expect(preview.headers['content-type']).toBe('image/png');
-      expect(preview.body).toBe('preview-bytes');
+      expect(Buffer.from(preview.rawPayload).equals(imageBuffer)).toBe(true);
+
+      await app.close();
+    });
+
+    test('returns 400 when the asset library already has 25 assets', async () => {
+      const repos = repositories();
+      for (let i = 0; i < 25; i++) {
+        await repos.assets.registerLocalImage({
+          pathOrObjectKey: `assets/images/originals/existing-${i}.jpg`,
+          altTextDefault: `Existing ${i}`
+        });
+      }
+      const { app, authHeaders } = await makeApp({ repositories: repos });
+
+      const imageBuffer = await makeValidImageBuffer();
+      const form = new FormData();
+      form.append('altTextDefault', 'A blue square');
+      form.append('file', imageBuffer, { filename: 'test.png', contentType: 'image/png' });
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/assets/upload-multipart',
+        headers: { ...authHeaders, ...form.getHeaders() },
+        payload: form.getBuffer()
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({ error: 'Asset library is limited to 25 images' });
 
       await app.close();
     });
