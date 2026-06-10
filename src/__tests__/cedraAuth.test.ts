@@ -112,7 +112,11 @@ describe('makeAdminFetcher', () => {
     const admins = await fetchAdmins();
 
     expect(view).toHaveBeenCalledTimes(3);
-    expect(view).toHaveBeenCalledWith('0xc0ffee::wallet_treasury::get_primary_admin');
+    expect(view.mock.calls.map(([fn]) => fn)).toEqual([
+      '0xc0ffee::wallet_treasury::get_primary_admin',
+      '0xc0ffee::wallet_treasury::get_secondary_admin',
+      '0xc0ffee::wallet_treasury::get_tertiary_admin'
+    ]);
     expect(admins).toHaveLength(2);
     expect(isAdmin(PRIMARY, admins)).toBe(true);
     expect(isAdmin(SECONDARY, admins)).toBe(true);

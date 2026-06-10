@@ -71,11 +71,10 @@ export type AdminFetcher = () => Promise<string[]>;
 
 export type ViewCaller = (functionId: string) => Promise<string>;
 
-const ADMIN_VIEW_FUNCTIONS = [
-  'get_primary_admin',
-  'get_secondary_admin',
-  'get_tertiary_admin'
-] as const;
+type AdminAddressViewFunction =
+  | 'get_primary_admin'
+  | 'get_secondary_admin'
+  | 'get_tertiary_admin';
 
 export function makeAdminFetcher(opts: {
   fullnodeUrl: string;
@@ -92,11 +91,11 @@ export function makeAdminFetcher(opts: {
       return cache.admins;
     }
     try {
-      const results = await Promise.all(
-        ADMIN_VIEW_FUNCTIONS.map(fn =>
-          view(`${opts.contractAddress}::wallet_treasury::${fn}`)
-        )
-      );
+      const results = await Promise.all([
+        view(adminAddressViewId(opts.contractAddress, 'get_primary_admin')),
+        view(adminAddressViewId(opts.contractAddress, 'get_secondary_admin')),
+        view(adminAddressViewId(opts.contractAddress, 'get_tertiary_admin'))
+      ]);
       const zero = normalizeAddress('0x0');
       const admins = results
         .map(raw => normalizeAddress(raw))
@@ -109,6 +108,10 @@ export function makeAdminFetcher(opts: {
       throw error;
     }
   };
+}
+
+function adminAddressViewId(contractAddress: string, fn: AdminAddressViewFunction): string {
+  return `${contractAddress}::wallet_treasury::${fn}`;
 }
 
 function makeRestViewCaller(fullnodeUrl: string, timeoutMs: number): ViewCaller {
