@@ -33,7 +33,7 @@ npm run db:migrate
 npm run dev
 ```
 
-Open the dashboard at `http://localhost:3000/messages` and sign in with `DASHBOARD_ADMIN_USER` / `DASHBOARD_ADMIN_PASSWORD`.
+Open the dashboard at `http://localhost:3000/messages` and sign in by connecting a Cedra wallet (Nova Wallet). Only wallets that are admins of the on-chain treasury contract are authorised. For plain-http local development set `COOKIE_SECURE=false`.
 
 Use `/assets` to register reusable images. For Replit-friendly durability, upload images through the dashboard so the image bytes and default alt text are stored in Postgres. Repo-path assets are also supported for bundled images such as files under `assets/images/originals/`.
 
@@ -41,9 +41,12 @@ Use `/assets` to register reusable images. For Replit-friendly durability, uploa
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `DATABASE_URL` | yes | Postgres connection string. Use Replit Postgres' `DATABASE_URL` after import. |
-| `DASHBOARD_ADMIN_USER` | yes | Basic-auth username for the private dashboard. |
-| `DASHBOARD_ADMIN_PASSWORD` | yes | Basic-auth password for the private dashboard. |
+| `DATABASE_URL` | yes | Postgres connection string. |
+| `SESSION_SECRET` | yes (production) | Secret used to sign dashboard session cookies. |
+| `CEDRA_FULLNODE_URL` | no | Cedra fullnode REST URL. Defaults to `https://testnet.cedra.dev/v1`. |
+| `ADMIN_CONTRACT_ADDRESS` | no | Contract whose `wallet_treasury` admins may sign in. Defaults to the deployed testnet contract. |
+| `ADMIN_CACHE_TTL_MS` | no | How long the on-chain admin list is cached. Defaults to `60000`. |
+| `COOKIE_SECURE` | no | Set `false` for plain-http local development. Defaults to `true`. |
 | `BSKY_IDENTIFIER` | for live posting | Bluesky handle or identifier. |
 | `BSKY_APP_PASSWORD` | for live posting | Bluesky app password for the worker. |
 | `MASTODON_INSTANCE_URL` | no | Mastodon instance base URL. Defaults to `https://mastodon.social`. |

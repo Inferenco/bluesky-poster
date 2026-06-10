@@ -7,22 +7,26 @@ import cookie from '@fastify/cookie';
 import session from '@fastify/session';
 import sharp from 'sharp';
 import type { AppConfig } from './config.js';
-import type { AssetRecord, RegisterLocalImageInput, RegisterObjectStorageImageInput } from './repositories/assets.js';
+import type { AssetRecord, RegisterImageBufferInput, RegisterLocalImageInput, RegisterObjectStorageImageInput } from './repositories/assets.js';
 import { normalizePlatforms, type CreateMessageInput, type MessageRecord, type MessageStatus, type PostingPlatform } from './repositories/messages.js';
 import { countGraphemes } from './validate.js';
-import { downloadObject, uploadBuffer } from './replit_integrations/object_storage.js';
+import { downloadObject } from './replit_integrations/object_storage.js';
 import type { PostGenerator } from './services/postGenerator.js';
+import fastifyStatic from '@fastify/static';
 import {
-  buildLoginUrl,
-  buildLogoutUrl,
-  exchangeCode,
-  extractUserFromClaims,
-  generateState,
-  getCallbackUrl,
-  getRequestHost,
-  isUserAllowed,
-} from './replit_integrations/replitAuth.js';
-import { randomPKCECodeVerifier } from 'openid-client';
+  LOGIN_MESSAGE,
+  NONCE_MAX_AGE_MS,
+  generateNonce,
+  isAdmin,
+  makeAdminFetcher,
+  normalizeAddress,
+  verifyWalletSignature,
+  type AdminFetcher,
+  type SignatureVerifier,
+  type VerifyInput,
+} from './auth/cedraAuth.js';
+
+const ASSET_LIBRARY_LIMIT = 25;
 
 export interface AppRepositories {
   messages: {
@@ -38,6 +42,7 @@ export interface AppRepositories {
     list(): Promise<AssetRecord[]>;
     get(id: string): Promise<AssetRecord | null>;
     registerLocalImage(input: RegisterLocalImageInput): Promise<AssetRecord>;
+    registerImageBuffer(input: RegisterImageBufferInput): Promise<AssetRecord>;
     registerObjectStorageImage(input: RegisterObjectStorageImageInput): Promise<AssetRecord>;
     delete(id: string): Promise<void>;
   };
@@ -71,41 +76,32 @@ export interface DashboardRun {
   error: string | null;
 }
 
-function makeRequireAuth(config: Pick<AppConfig, 'dashboard'>) {
-  const allowedReplitUsers = config.dashboard.allowedReplitUsers;
-
+function makeRequireAuth(fetchAdmins: AdminFetcher) {
   return async function requireAuth(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    // Primary: OIDC session auth
     const sessionUser = request.session.user;
-    if (sessionUser) {
-      if (!isUserAllowed(sessionUser, allowedReplitUsers)) {
-        void reply.code(403).type('text/html').send(renderForbiddenPage());
-        return;
-      }
+    if (!sessionUser) {
+      void reply.type('text/html').send(renderLoginPage());
       return;
     }
 
-    // Fallback: legacy Replit header auth (dev/preview environment)
-    const userId = request.headers['x-replit-user-id'];
-    if (userId) {
-      if (allowedReplitUsers.length > 0) {
-        const userName = String(request.headers['x-replit-user-name'] ?? '').toLowerCase();
-        if (!allowedReplitUsers.includes(userName)) {
-          void reply.code(403).type('text/html').send(renderForbiddenPage());
-          return;
-        }
-      }
-      return;
+    // Re-validate against the (TTL-cached) on-chain admin list so a removed
+    // admin loses access promptly instead of after the session expires.
+    const admins = await fetchAdmins().catch(() => null);
+    if (admins && !isAdmin(sessionUser.address, admins)) {
+      await request.session.destroy();
+      void reply.code(403).type('text/html').send(renderForbiddenPage());
     }
-
-    void reply.type('text/html').send(renderLoginPage());
   };
 }
 
 export async function buildApp(options: {
-  config: Pick<AppConfig, 'dashboard'>;
+  config: Pick<AppConfig, 'auth'>;
   repositories: AppRepositories;
   postGenerator?: PostGenerator;
+  auth?: {
+    fetchAdmins?: AdminFetcher;
+    verifySignature?: SignatureVerifier;
+  };
 }): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   await app.register(formbody);
@@ -119,71 +115,75 @@ export async function buildApp(options: {
   await app.register(session, {
     secret: process.env.SESSION_SECRET ?? 'fallback-secret-change-me-in-production!!',
     cookie: {
-      secure: true,
+      secure: options.config.auth.secureCookies,
       httpOnly: true,
       maxAge: 7 * 24 * 60 * 60 * 1000,
     },
     saveUninitialized: false,
   });
-
-  const requireAuth = makeRequireAuth(options.config);
-
-  // OIDC auth routes
-  app.get('/api/login', async (request, reply) => {
-    const host = getRequestHost(request);
-    const state = generateState();
-    const codeVerifier = randomPKCECodeVerifier();
-    request.session.oidcState = state;
-    request.session.codeVerifier = codeVerifier;
-    await request.session.save();
-    const loginUrl = await buildLoginUrl(getCallbackUrl(host), state, codeVerifier);
-    return reply.redirect(loginUrl);
+  await app.register(fastifyStatic, {
+    root: path.join(process.cwd(), 'public'),
+    prefix: '/public/'
   });
 
-  app.get('/api/callback', async (request, reply) => {
-    const host = getRequestHost(request);
-    const callbackUrl = getCallbackUrl(host);
-    const currentUrl = new URL(request.url, `https://${host}`);
-    const expectedState = request.session.oidcState;
-    const codeVerifier = request.session.codeVerifier;
+  const fetchAdmins = options.auth?.fetchAdmins ?? makeAdminFetcher({
+    fullnodeUrl: options.config.auth.cedraFullnodeUrl,
+    contractAddress: options.config.auth.adminContractAddress,
+    ttlMs: options.config.auth.adminCacheTtlMs,
+    viewTimeoutMs: options.config.auth.adminViewTimeoutMs
+  });
+  const verifySignature = options.auth?.verifySignature ?? verifyWalletSignature;
+  const requireAuth = makeRequireAuth(fetchAdmins);
 
-    if (!expectedState || !codeVerifier) {
-      return reply.redirect('/api/login');
+  // Wallet auth routes
+  app.get('/api/auth/nonce', async (request) => {
+    const nonce = generateNonce();
+    request.session.authNonce = nonce;
+    request.session.authNonceIssuedAt = Date.now();
+    await request.session.save();
+    return { nonce, message: LOGIN_MESSAGE };
+  });
+
+  app.post<{ Body: VerifyInput }>('/api/auth/verify', async (request, reply) => {
+    const { authNonce, authNonceIssuedAt } = request.session;
+    if (!authNonce || !authNonceIssuedAt || Date.now() - authNonceIssuedAt > NONCE_MAX_AGE_MS) {
+      return reply.code(401).send({ error: 'nonce_expired' });
     }
+    request.session.authNonce = undefined;
+    request.session.authNonceIssuedAt = undefined;
 
-    try {
-      const tokens = await exchangeCode(callbackUrl, currentUrl, expectedState, codeVerifier);
-      const claims = tokens.claims() as Record<string, unknown>;
-      const user = extractUserFromClaims(claims);
-      console.log('[auth] OIDC login claims:', JSON.stringify(claims));
-
-      const allowedUsers = options.config.dashboard.allowedReplitUsers;
-      if (!isUserAllowed(user, allowedUsers)) {
-        request.session.user = undefined;
-        await request.session.save();
-        return reply.code(403).type('text/html').send(renderForbiddenPage());
-      }
-
-      request.session.user = user;
-      request.session.oidcState = undefined;
-      request.session.codeVerifier = undefined;
+    const body = request.body ?? ({} as VerifyInput);
+    if (!verifySignature(body, { nonce: authNonce, message: LOGIN_MESSAGE })) {
       await request.session.save();
-      return reply.redirect('/');
-    } catch (err) {
-      console.error('[auth] OIDC callback error:', err);
-      return reply.redirect('/api/login');
+      return reply.code(401).send({ error: 'invalid_signature' });
     }
+
+    const address = normalizeAddress(body.address);
+    if (!address) {
+      await request.session.save();
+      return reply.code(400).send({ error: 'invalid_address' });
+    }
+    let admins: string[];
+    try {
+      admins = await fetchAdmins();
+    } catch (error) {
+      request.log.warn({ err: error }, 'Admin lookup failed during wallet login');
+      await request.session.save();
+      return reply.code(502).send({ error: 'admin_lookup_failed' });
+    }
+    if (!isAdmin(address, admins)) {
+      await request.session.save();
+      return reply.code(403).send({ error: 'not_admin' });
+    }
+
+    request.session.user = { address };
+    await request.session.save();
+    return { ok: true };
   });
 
   app.get('/api/logout', async (request, reply) => {
-    const host = getRequestHost(request);
     await request.session.destroy();
-    try {
-      const logoutUrl = await buildLogoutUrl(host);
-      return reply.redirect(logoutUrl);
-    } catch {
-      return reply.redirect('/');
-    }
+    return reply.redirect('/');
   });
 
   app.get('/healthz', async () => ({ ok: true }));
@@ -355,6 +355,11 @@ export async function buildApp(options: {
   });
 
   app.post('/assets/upload-multipart', { preHandler: requireAuth }, async (request, reply) => {
+    const existingAssets = await options.repositories.assets.list();
+    if (existingAssets.length >= ASSET_LIBRARY_LIMIT) {
+      return reply.code(400).send({ error: `Asset library is limited to ${ASSET_LIBRARY_LIMIT} images` });
+    }
+
     let fileBuffer: Buffer | null = null;
     let fileName = '';
     let mimeType = '';
@@ -401,15 +406,10 @@ export async function buildApp(options: {
     }
 
     try {
-      const { objectKey, publicUrl } = await uploadBuffer(fileName, fileBuffer, mimeType);
-      await options.repositories.assets.registerObjectStorageImage({
-        objectKey,
-        publicUrl,
-        mimeType,
+      await options.repositories.assets.registerImageBuffer({
+        fileName,
+        content: fileBuffer,
         altTextDefault,
-        width: metadata.width,
-        height: metadata.height,
-        bytes: fileBuffer.length,
       });
     } catch (err) {
       return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
@@ -551,15 +551,19 @@ type IconName =
 function renderForbiddenPage(): string {
   return renderAuthPage({
     title: 'Access denied',
-    message: 'Your Replit account does not have permission to access this dashboard.'
+    message: 'This wallet is not an admin of the treasury contract.'
   });
 }
 
 function renderLoginPage(): string {
   return renderAuthPage({
     title: 'Inferenco Poster',
-    message: 'Sign in with your Replit account to access the dashboard.',
-    action: '<a class="button primary" href="/api/login">Sign in with Replit</a>'
+    message: 'Connect your Cedra wallet and sign a message to access the dashboard.',
+    action: `<div id="wallet-login" class="wallet-login">
+      <div id="wallet-buttons" class="auth-actions"></div>
+      <p id="wallet-status" class="wallet-status" role="status"></p>
+    </div>
+    <script src="/public/login.js"></script>`
   });
 }
 
@@ -578,7 +582,9 @@ function renderAuthPage(input: { title: string; message: string; action?: string
     .auth-brand strong { font-size: 18px; line-height: 1.1; }
     h1 { margin: 0 0 10px; color: var(--text); font-size: 24px; line-height: 1.15; text-align: center; }
     p { margin: 0 0 26px; color: var(--muted); font-size: 14px; line-height: 1.55; text-align: center; }
-    .auth-actions { display: flex; justify-content: center; }
+    .auth-actions { display: flex; flex-direction: column; align-items: stretch; gap: 10px; }
+    .wallet-status { min-height: 20px; margin: 14px 0 0; color: var(--muted); font-size: 13px; text-align: center; }
+    .wallet-status.error { color: var(--danger); }
   </style>
 </head>
 <body>

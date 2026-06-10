@@ -1,5 +1,6 @@
 /node_modules
 /dist
+/public/login.js
 .env
 .DS_Store
 PLAN.md
