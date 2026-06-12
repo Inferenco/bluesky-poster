@@ -14,13 +14,13 @@ import { downloadObject } from './replit_integrations/object_storage.js';
 import type { PostGenerator } from './services/postGenerator.js';
 import fastifyStatic from '@fastify/static';
 import {
-  LOGIN_MESSAGE,
   NONCE_MAX_AGE_MS,
+  buildLoginMessage,
   generateNonce,
   isAdmin,
   makeAdminFetcher,
+  explainSignatureFailure,
   normalizeAddress,
-  verifyWalletSignature,
   type AdminFetcher,
   type SignatureVerifier,
   type VerifyInput,
@@ -132,7 +132,13 @@ export async function buildApp(options: {
     ttlMs: options.config.auth.adminCacheTtlMs,
     viewTimeoutMs: options.config.auth.adminViewTimeoutMs
   });
-  const verifySignature = options.auth?.verifySignature ?? verifyWalletSignature;
+  // An injected verifier only yields a boolean; the built-in one reports
+  // which check failed so the login page can surface it.
+  const injectedVerifier = options.auth?.verifySignature;
+  const explainFailure = injectedVerifier
+    ? (input: VerifyInput, expected: { message: string }) =>
+        injectedVerifier(input, expected) ? null : 'invalid_signature'
+    : explainSignatureFailure;
   const requireAuth = makeRequireAuth(fetchAdmins);
 
   // Wallet auth routes
@@ -141,7 +147,7 @@ export async function buildApp(options: {
     request.session.authNonce = nonce;
     request.session.authNonceIssuedAt = Date.now();
     await request.session.save();
-    return { nonce, message: LOGIN_MESSAGE };
+    return { nonce, message: buildLoginMessage(nonce) };
   });
 
   app.post<{ Body: VerifyInput }>('/api/auth/verify', async (request, reply) => {
@@ -153,9 +159,10 @@ export async function buildApp(options: {
     request.session.authNonceIssuedAt = undefined;
 
     const body = request.body ?? ({} as VerifyInput);
-    if (!verifySignature(body, { nonce: authNonce, message: LOGIN_MESSAGE })) {
+    const failure = explainFailure(body, { message: buildLoginMessage(authNonce) });
+    if (failure) {
       await request.session.save();
-      return reply.code(401).send({ error: 'invalid_signature' });
+      return reply.code(401).send({ error: failure });
     }
 
     const address = normalizeAddress(body.address);
@@ -555,6 +562,9 @@ function renderForbiddenPage(): string {
   });
 }
 
+// Cache-buster so browsers never run a stale login bundle after a deploy.
+const LOGIN_BUNDLE_VERSION = Date.now();
+
 function renderLoginPage(): string {
   return renderAuthPage({
     title: 'Inferenco Poster',
@@ -563,7 +573,7 @@ function renderLoginPage(): string {
       <div id="wallet-buttons" class="auth-actions"></div>
       <p id="wallet-status" class="wallet-status" role="status"></p>
     </div>
-    <script src="/public/login.js"></script>`
+    <script src="/public/login.js?v=${LOGIN_BUNDLE_VERSION}"></script>`
   });
 }
 

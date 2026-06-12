@@ -1,9 +1,12 @@
 import crypto from 'node:crypto';
 import {
   AccountAddress,
+  AnyPublicKey,
   AuthenticationKey,
+  Deserializer,
   Ed25519PublicKey,
-  Ed25519Signature
+  Ed25519Signature,
+  Hex
 } from '@cedra-labs/ts-sdk';
 
 export interface SessionUser {
@@ -25,9 +28,20 @@ export function generateNonce(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
+/**
+ * The challenge embeds the nonce in the message body itself, because some
+ * wallets (Nova Desk) sign exactly the message they are shown rather than
+ * an envelope with a separate nonce line. Signing this message is therefore
+ * always proof of holding this session's nonce, regardless of wallet.
+ */
+export function buildLoginMessage(nonce: string): string {
+  return `${LOGIN_MESSAGE}\nNonce: ${nonce}`;
+}
+
 export interface VerifyInput {
   message: string;
-  nonce: string;
+  /** Legacy echo of the server nonce; unused (the nonce is inside `message`). */
+  nonce?: string;
   fullMessage: string;
   signature: string;
   publicKey: string;
@@ -36,36 +50,71 @@ export interface VerifyInput {
 
 export type SignatureVerifier = (
   input: VerifyInput,
-  expected: { nonce: string; message: string }
+  expected: { message: string }
 ) => boolean;
 
 /**
  * Verifies that the wallet that signed `fullMessage` controls `address` and
  * that the signed payload embeds the nonce/message this server issued.
- * Only pure Ed25519 accounts are supported; other key schemes are rejected.
+ * Returns null on success, or a short reason code describing the failed
+ * check. Only Ed25519 keys are supported (raw or wrapped in AnyPublicKey);
+ * other key schemes are rejected.
  */
-export const verifyWalletSignature: SignatureVerifier = (input, expected) => {
+export function explainSignatureFailure(
+  input: VerifyInput,
+  expected: { message: string }
+): string | null {
   try {
-    if (input.nonce !== expected.nonce || input.message !== expected.message) {
-      return false;
-    }
-    // The wallet builds fullMessage itself; the embedded nonce is what binds
-    // the signature to this login attempt.
-    if (!input.fullMessage.includes(expected.nonce) || !input.fullMessage.includes(expected.message)) {
-      return false;
-    }
-    const publicKey = new Ed25519PublicKey(input.publicKey);
+    if (input.message !== expected.message) return 'message_mismatch';
+    // The wallet builds fullMessage itself; the embedded message (which
+    // contains the nonce) is what binds the signature to this login attempt.
+    if (!input.fullMessage.includes(expected.message)) return 'message_not_in_signed_payload';
+    const publicKey = parseEd25519PublicKey(input.publicKey);
+    if (!publicKey) return 'unsupported_public_key';
     const signature = new Ed25519Signature(input.signature);
     const signedBytes = new TextEncoder().encode(input.fullMessage);
     if (!publicKey.verifySignature({ message: signedBytes, signature })) {
-      return false;
+      return 'signature_invalid';
     }
-    const derived = AuthenticationKey.fromPublicKey({ publicKey }).derivedAddress();
-    return derived.equals(AccountAddress.from(input.address));
-  } catch {
-    return false;
+    const claimed = AccountAddress.from(normalizeAddress(input.address) ?? input.address);
+    // Legacy Ed25519 accounts and SingleKey accounts derive different
+    // addresses from the same key; Nova Desk accounts may be either.
+    const legacy = AuthenticationKey.fromPublicKey({ publicKey }).derivedAddress();
+    if (legacy.equals(claimed)) return null;
+    const singleKey = AuthenticationKey.fromPublicKey({
+      publicKey: new AnyPublicKey(publicKey)
+    }).derivedAddress();
+    if (singleKey.equals(claimed)) return null;
+    return 'address_mismatch';
+  } catch (error) {
+    return `verify_error: ${error instanceof Error ? error.message : 'unknown'}`;
   }
-};
+}
+
+export const verifyWalletSignature: SignatureVerifier = (input, expected) =>
+  explainSignatureFailure(input, expected) === null;
+
+/** Accepts a raw 32-byte Ed25519 key or a BCS-serialized AnyPublicKey wrapping one. */
+function parseEd25519PublicKey(raw: string): Ed25519PublicKey | null {
+  let bytes: Uint8Array;
+  try {
+    bytes = Hex.fromHexInput(raw.trim()).toUint8Array();
+  } catch {
+    return null;
+  }
+  if (bytes.length === Ed25519PublicKey.LENGTH) {
+    return new Ed25519PublicKey(bytes);
+  }
+  try {
+    const any = AnyPublicKey.deserialize(new Deserializer(bytes));
+    if (any.publicKey instanceof Ed25519PublicKey) {
+      return any.publicKey;
+    }
+  } catch {
+    // fall through
+  }
+  return null;
+}
 
 export type AdminFetcher = () => Promise<string[]>;
 

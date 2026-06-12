@@ -56,6 +56,15 @@ async function signIn(walletName: string): Promise<void> {
   allButtons.forEach(b => { b.disabled = true; });
   try {
     setStatus('Connecting wallet...');
+    // A resumed session may point at a previously used account; drop it so
+    // the wallet prompts fresh (connect() also throws if already connected).
+    if (core.isConnected()) {
+      try {
+        await core.disconnect();
+      } catch {
+        // stale session — safe to continue with a fresh connect
+      }
+    }
     await core.connect(walletName);
     const account = core.account;
     if (!account) {
@@ -100,7 +109,7 @@ async function signIn(walletName: string): Promise<void> {
     if (error instanceof DOMException && error.name === 'TimeoutError') {
       setStatus('Verification timed out. Check the server logs and try again.', true);
     } else {
-      setStatus(error instanceof Error ? error.message : 'Wallet connection failed.', true);
+      setStatus(describeError(error), true);
     }
   } finally {
     allButtons.forEach(b => { b.disabled = false; });
@@ -112,6 +121,13 @@ async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}
     ...init,
     signal: init.signal ?? AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS)
   });
+}
+
+function describeError(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  // wallet-adapter-core sometimes throws plain strings (e.g. "already connected")
+  if (typeof error === 'string' && error.trim()) return error;
+  return 'Wallet connection failed.';
 }
 
 async function readAuthError(response: Response): Promise<string | null> {
