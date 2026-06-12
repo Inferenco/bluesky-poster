@@ -7,6 +7,15 @@ import cookie from '@fastify/cookie';
 import session from '@fastify/session';
 import sharp from 'sharp';
 import type { AppConfig } from './config.js';
+
+// Extend Fastify.Session for custom properties used in this app
+declare module 'fastify' {
+  interface Session {
+    user?: { address: string };
+    authNonce?: string;
+    authNonceIssuedAt?: number;
+  }
+}
 import type { AssetRecord, RegisterImageBufferInput, RegisterLocalImageInput, RegisterObjectStorageImageInput } from './repositories/assets.js';
 import { normalizePlatforms, type CreateMessageInput, type MessageRecord, type MessageStatus, type PostingPlatform } from './repositories/messages.js';
 import { countGraphemes } from './validate.js';
