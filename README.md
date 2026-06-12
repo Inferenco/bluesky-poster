@@ -42,6 +42,7 @@ Use `/assets` to register reusable images. For Replit-friendly durability, uploa
 | Variable | Required | Description |
 | --- | --- | --- |
 | `DATABASE_URL` | yes | Postgres connection string. |
+| `POSTGRES_TEST_DATABASE_URL` | no | Disposable Postgres database for integration tests. Must not match `DATABASE_URL`, and the database name must include `test` as its own segment. |
 | `SESSION_SECRET` | yes (production) | Secret used to sign dashboard session cookies. |
 | `CEDRA_FULLNODE_URL` | no | Cedra fullnode REST URL. Defaults to `https://testnet.cedra.dev/v1`. |
 | `ADMIN_CONTRACT_ADDRESS` | no | Contract whose `wallet_treasury` admins may sign in. Defaults to the deployed testnet contract. |
@@ -67,6 +68,8 @@ npm run test        # run tests
 npm run build       # compile to dist/
 npm run start       # run compiled server
 ```
+
+Postgres integration tests are skipped unless `POSTGRES_TEST_DATABASE_URL` is set. They intentionally truncate `post_runs`, `messages`, and `assets`, so never point this variable at a production or shared app database. For local Docker, create a separate database such as `bluesky_poster_test` before enabling it.
 
 ## Replit Deployment
 

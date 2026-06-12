@@ -26,6 +26,7 @@ Open the preview and sign in with the credentials stored in `DASHBOARD_ADMIN_USE
 | Variable | Required | Description |
 | --- | --- | --- |
 | `DATABASE_URL` | yes | Postgres connection string (provided by Replit) |
+| `POSTGRES_TEST_DATABASE_URL` | no | Disposable Postgres database for integration tests only; must not match `DATABASE_URL` |
 | `DASHBOARD_ADMIN_USER` | no | Basic-auth username (only needed if not using Replit auth) |
 | `DASHBOARD_ADMIN_PASSWORD` | no | Basic-auth password (only needed if not using Replit auth) |
 | `DASHBOARD_ALLOWED_REPLIT_USERS` | no | Comma-separated Replit usernames allowed to access the dashboard via Replit auth (e.g. `alice,bob`). If unset, all authenticated Replit users are allowed. |
