@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "engines": {
-    "node": ">=20.0.0"
+    "node": "24.x"
   },
   "scripts": {
     "dev": "npm run build:client && node ./node_modules/tsx/dist/cli.mjs watch src/server.ts",
