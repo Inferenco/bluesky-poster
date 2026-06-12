@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from 'node:timers/promises';
+import 'dotenv/config';
 import { buildApp } from './app.js';
 import { AtprotoBlueskyPublisher, getAgent } from './bluesky.js';
 import { loadConfig } from './config.js';

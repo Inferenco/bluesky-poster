@@ -2,6 +2,7 @@ import { AtprotoBlueskyPublisher, getAgent } from '../bluesky.js';
 import type { MessageRecord } from '../repositories/messages.js';
 import { validateOutboundMessage } from '../services/poster.js';
 import { hashText } from '../validate.js';
+import 'dotenv/config';
 
 const CONFIRMATION = 'I_UNDERSTAND_THIS_WILL_POST_TO_BLUESKY';
 

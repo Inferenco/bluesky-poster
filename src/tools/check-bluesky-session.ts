@@ -1,4 +1,5 @@
 import { getAgent } from '../bluesky.js';
+import 'dotenv/config';
 
 async function main(): Promise<void> {
   const identifier = process.env.BSKY_IDENTIFIER ?? process.env.BSKY_HANDLE;
