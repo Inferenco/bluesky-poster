@@ -24,7 +24,6 @@
   "dependencies": {
     "@atproto/api": "^0.13.35",
     "@cedra-labs/ts-sdk": "^2.2.8",
-    "@fastify/cookie": "^8.3.0",
     "@fastify/formbody": "^7.4.0",
     "@fastify/multipart": "^7.7.3",
     "@fastify/session": "^8.3.0",
@@ -32,6 +31,7 @@
     "@fastify/view": "^7.4.1",
     "@google-cloud/storage": "^7.19.0",
     "fastify": "^4.29.1",
+    "fastify-cookie": "^5.7.0",
     "google-auth-library": "^10.6.2",
     "image-size": "^2.0.2",
     "nanoid": "^5.1.11",

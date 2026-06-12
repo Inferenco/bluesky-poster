@@ -3,7 +3,7 @@ import path from 'node:path';
 import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyReply } from 'fastify';
 import formbody from '@fastify/formbody';
 import multipart from '@fastify/multipart';
-import cookie from '@fastify/cookie';
+import cookie from 'fastify-cookie';
 import session from '@fastify/session';
 import sharp from 'sharp';
 import type { AppConfig } from './config.js';
