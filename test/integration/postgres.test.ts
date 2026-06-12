@@ -14,7 +14,44 @@ import { SchedulerService } from '../../src/services/scheduler.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 const describeIfDb = databaseUrl ? describe : describe.skip;
-const auth = `Basic ${Buffer.from('admin:secret').toString('base64')}`;
+
+const ADMIN_ADDRESS = '0xbdf9c94e797716648980ed99a0c6e2b3d6452ce5c1d28dbad3517a9be682b724';
+
+const testConfig = {
+  auth: {
+    cedraFullnodeUrl: 'http://unused.example',
+    adminContractAddress: '0x1',
+    adminCacheTtlMs: 60_000,
+    adminViewTimeoutMs: 5_000,
+    secureCookies: false
+  }
+};
+
+async function loginCookie(app: Awaited<ReturnType<typeof buildApp>>): Promise<string> {
+  const nonceRes = await app.inject({ method: 'GET', url: '/api/auth/nonce' });
+  const setCookie = nonceRes.headers['set-cookie'];
+  const cookie = (Array.isArray(setCookie) ? setCookie[0] : setCookie)?.split(';')[0];
+  if (!cookie) throw new Error('nonce response did not set a session cookie');
+  const { nonce } = nonceRes.json() as { nonce: string };
+  const verifyRes = await app.inject({
+    method: 'POST',
+    url: '/api/auth/verify',
+    headers: { cookie, 'content-type': 'application/json' },
+    payload: {
+      address: ADMIN_ADDRESS,
+      publicKey: '0x' + '00'.repeat(32),
+      signature: '0x' + '00'.repeat(64),
+      message: 'test',
+      nonce,
+      fullMessage: 'test'
+    }
+  });
+  if (verifyRes.statusCode !== 200) {
+    throw new Error(`login failed with ${verifyRes.statusCode}: ${verifyRes.body}`);
+  }
+  const verifyCookie = verifyRes.headers['set-cookie'];
+  return (Array.isArray(verifyCookie) ? verifyCookie[0] : verifyCookie)?.split(';')[0] ?? cookie;
+}
 
 describeIfDb('Postgres-backed app flow', () => {
   let pool: pg.Pool;
@@ -38,15 +75,20 @@ describeIfDb('Postgres-backed app flow', () => {
     const runs = new RunsRepository(pool, () => 'run-postgres-1');
 
     const app = await buildApp({
-      config: { dashboard: { user: 'admin', password: 'secret' } },
-      repositories: { messages, assets, settings, runs }
+      config: testConfig,
+      repositories: { messages, assets, settings, runs },
+      auth: {
+        fetchAdmins: async () => [ADMIN_ADDRESS],
+        verifySignature: () => true
+      }
     });
+    const cookie = await loginCookie(app);
 
     const assetPath = path.join(process.cwd(), 'assets/images/originals/Nova1.jpg');
     const assetResponse = await app.inject({
       method: 'POST',
       url: '/assets',
-      headers: { authorization: auth, 'content-type': 'application/x-www-form-urlencoded' },
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
       payload: `pathOrObjectKey=${encodeURIComponent(assetPath)}&altTextDefault=Nova%20integration%20asset`
     });
     expect(assetResponse.statusCode).toBe(302);
@@ -55,7 +97,7 @@ describeIfDb('Postgres-backed app flow', () => {
     const secondAssetResponse = await app.inject({
       method: 'POST',
       url: '/assets',
-      headers: { authorization: auth, 'content-type': 'application/x-www-form-urlencoded' },
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
       payload: `pathOrObjectKey=${encodeURIComponent(assetPath2)}&altTextDefault=Uploaded%20Postgres%20asset`
     });
     expect(secondAssetResponse.statusCode).toBe(302);
@@ -63,7 +105,7 @@ describeIfDb('Postgres-backed app flow', () => {
     const createResponse = await app.inject({
       method: 'POST',
       url: '/messages',
-      headers: { authorization: auth, 'content-type': 'application/x-www-form-urlencoded' },
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
       payload: 'body=Postgres%20backed%20message&status=approved&imageAssetId=asset-postgres-2'
     });
     expect(createResponse.statusCode).toBe(302);
@@ -98,7 +140,7 @@ describeIfDb('Postgres-backed app flow', () => {
     expect(result).toEqual({ status: 'posted', messageId: 'msg-postgres-1' });
     const history = await runs.list();
     expect(history).toMatchObject([{ id: 'run-postgres-1', message_id: 'msg-postgres-1', status: 'dry_run' }]);
-    const page = await app.inject({ method: 'GET', url: '/runs', headers: { authorization: auth } });
+    const page = await app.inject({ method: 'GET', url: '/runs', headers: { cookie } });
     expect(page.body).toContain('dry_run');
 
     await app.close();
