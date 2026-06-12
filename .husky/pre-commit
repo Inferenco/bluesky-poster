@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+# Check if package.json is staged
+if git diff --cached --name-only | grep -q "package.json"; then
+  npm install
+  git add package-lock.json
+fi

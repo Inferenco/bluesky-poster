@@ -19,7 +19,8 @@
     "test": "vitest run",
     "test:e2e": "vitest run test/e2e",
     "test:integration": "vitest run test/integration",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepare": "husky"
   },
   "dependencies": {
     "@atproto/api": "^0.13.35",
@@ -44,11 +45,12 @@
     "@cedra-labs/wallet-adapter-plugin": "^2.4.3",
     "@cedra-labs/wallet-standard": "^0.5.1",
     "@inferenco/nova-wallet-adapter": "^0.1.0",
-    "esbuild": "^0.25.0",
     "@types/node": "^20.19.41",
     "@types/pg": "^8.20.0",
     "@types/supertest": "^7.2.0",
+    "esbuild": "^0.25.0",
     "form-data": "^4.0.5",
+    "husky": "^9.1.7",
     "supertest": "^7.2.2",
     "tsx": "^4.22.3",
     "typescript": "^5.9.3",
