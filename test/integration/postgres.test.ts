@@ -11,8 +11,9 @@ import { RunsRepository } from '../../src/repositories/runs.js';
 import { SettingsRepository } from '../../src/repositories/settings.js';
 import { PosterService } from '../../src/services/poster.js';
 import { SchedulerService } from '../../src/services/scheduler.js';
+import { getPostgresTestDatabaseUrl } from './databaseSafety.js';
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = getPostgresTestDatabaseUrl();
 const describeIfDb = databaseUrl ? describe : describe.skip;
 
 const ADMIN_ADDRESS = '0xbdf9c94e797716648980ed99a0c6e2b3d6452ce5c1d28dbad3517a9be682b724';
@@ -57,6 +58,7 @@ describeIfDb('Postgres-backed app flow', () => {
   let pool: pg.Pool;
 
   beforeAll(async () => {
+    if (!databaseUrl) throw new Error('POSTGRES_TEST_DATABASE_URL is required for Postgres integration tests');
     pool = createPool(databaseUrl as string);
     await migrate(databaseUrl);
     await pool.query('truncate post_runs, messages, assets restart identity cascade');
