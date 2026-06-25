@@ -29,6 +29,8 @@ const AUTH_REQUEST_TIMEOUT_MS = 10_000;
 const MOBILE_RELAY_BASE_URL = 'https://nova-service-160604102004.europe-west1.run.app';
 const PENDING_SIGN_REQUEST_KEY = 'inferenco_poster_pending_sign_request';
 const PENDING_SIGN_MAX_AGE_MS = 5 * 60_000;
+const SIGN_STATUS_POLL_MS = 1_000;
+const SIGN_STATUS_TIMEOUT_MS = 2 * 60_000;
 let loginChallenge: LoginChallenge | null = null;
 let loginChallengeRequest: Promise<LoginChallenge> | null = null;
 const SIGN_REQUEST_OPENED = 'SIGN_REQUEST_OPENED';
@@ -286,31 +288,40 @@ async function resumePendingSignRequest(): Promise<void> {
   const pending = readPendingSignRequest();
   if (!pending) return;
 
-  const result = await fetchJsonWithTimeout<MobileRequestStatusResponse>(
-    buildRelayUrl(pending.relayBaseUrl, `/v1/requests/${encodeURIComponent(pending.requestId)}`),
-    AUTH_REQUEST_TIMEOUT_MS,
-    {
-      headers: {
-        'x-nova-session-token': pending.sessionToken
+  const deadline = Date.now() + SIGN_STATUS_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    setStatus('Waiting for Nova signature approval...');
+    const result = await fetchJsonWithTimeout<MobileRequestStatusResponse>(
+      buildRelayUrl(pending.relayBaseUrl, `/v1/requests/${encodeURIComponent(pending.requestId)}`),
+      AUTH_REQUEST_TIMEOUT_MS,
+      {
+        headers: {
+          'x-nova-session-token': pending.sessionToken
+        }
       }
+    );
+
+    if (result.status === 'approved' && result.encryptedResult) {
+      const signed = decryptJson(result.encryptedResult, pending.sharedSecret) as Awaited<ReturnType<typeof core.signMessage>>;
+      clearPendingSignRequest();
+      await verifySignedLogin(signed, {
+        address: pending.address,
+        publicKey: pending.publicKey
+      });
+      return;
     }
-  );
 
-  if (result.status === 'approved' && result.encryptedResult) {
-    const signed = decryptJson(result.encryptedResult, pending.sharedSecret) as Awaited<ReturnType<typeof core.signMessage>>;
-    clearPendingSignRequest();
-    await verifySignedLogin(signed, {
-      address: pending.address,
-      publicKey: pending.publicKey
-    });
-    return;
+    if (['rejected', 'expired', 'cancelled', 'revoked'].includes(result.status)) {
+      clearPendingSignRequest();
+      clearLoginChallenge();
+      setStatus(result.errorMessage ?? `Nova signature request ${result.status}.`, true);
+      return;
+    }
+
+    await delay(SIGN_STATUS_POLL_MS);
   }
 
-  if (['rejected', 'expired', 'cancelled', 'revoked'].includes(result.status)) {
-    clearPendingSignRequest();
-    clearLoginChallenge();
-    setStatus(result.errorMessage ?? `Nova signature request ${result.status}.`, true);
-  }
+  setStatus('Timed out waiting for Nova signature approval. Open Nova Wallet again or cancel and retry.', true);
 }
 
 async function verifySignedLogin(
@@ -405,6 +416,10 @@ function callbackUrlWithoutMarkers(): string {
   url.searchParams.delete('novaRequestId');
   url.searchParams.delete('novaStatus');
   return url.toString();
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => window.setTimeout(resolve, ms));
 }
 
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
