@@ -31,6 +31,7 @@ const PENDING_SIGN_REQUEST_KEY = 'inferenco_poster_pending_sign_request';
 const PENDING_SIGN_MAX_AGE_MS = 5 * 60_000;
 let loginChallenge: LoginChallenge | null = null;
 let loginChallengeRequest: Promise<LoginChallenge> | null = null;
+const SIGN_REQUEST_OPENED = 'SIGN_REQUEST_OPENED';
 
 interface LoginChallenge {
   nonce: string;
@@ -217,6 +218,10 @@ async function signInConnectedWallet(): Promise<void> {
       publicKey: String(account.publicKey)
     });
   } catch (error) {
+    if (error instanceof Error && error.message === SIGN_REQUEST_OPENED) {
+      setStatus('Signature request opened in Nova Wallet. Return here after approving.');
+      return;
+    }
     clearLoginChallenge();
     void prepareLoginChallenge().catch(() => {
       // The original signing error is more useful to show here.
@@ -271,7 +276,7 @@ async function signMessageWithNova(
         createdAt: Date.now()
       });
       window.location.href = response.walletDeeplinkUrl;
-      throw new Error('Signature request opened in Nova Wallet. Return here after approving.');
+      throw new Error(SIGN_REQUEST_OPENED);
     }
   }
   return core.signMessage(input);
