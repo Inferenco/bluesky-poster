@@ -28,19 +28,18 @@ export function generateNonce(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
-/**
- * The challenge embeds the nonce in the message body itself, because some
- * wallets (Nova Desk) sign exactly the message they are shown rather than
- * an envelope with a separate nonce line. Signing this message is therefore
- * always proof of holding this session's nonce, regardless of wallet.
- */
 export function buildLoginMessage(nonce: string): string {
+  return `${LOGIN_MESSAGE}. Nonce: ${nonce}`;
+}
+
+/** Legacy challenge format kept so outstanding sessions and older clients still verify. */
+export function buildLegacyLoginMessage(nonce: string): string {
   return `${LOGIN_MESSAGE}\nNonce: ${nonce}`;
 }
 
 export interface VerifyInput {
   message: string;
-  /** Legacy echo of the server nonce; unused (the nonce is inside `message`). */
+  /** Legacy echo of the server nonce; the signed `message` remains authoritative. */
   nonce?: string;
   fullMessage: string;
   signature: string;
@@ -65,14 +64,23 @@ export function explainSignatureFailure(
   expected: { message: string }
 ): string | null {
   try {
-    if (input.message !== expected.message) return 'message_mismatch';
-    // The wallet builds fullMessage itself; the embedded message (which
-    // contains the nonce) is what binds the signature to this login attempt.
-    if (!input.fullMessage.includes(expected.message)) return 'message_not_in_signed_payload';
+    const expectedNonce = extractLoginNonce(expected.message);
+    const acceptedMessages = expectedNonce
+      ? [buildLoginMessage(expectedNonce), buildLegacyLoginMessage(expectedNonce)]
+      : [expected.message];
+    if (!acceptedMessages.includes(input.message)) return 'message_mismatch';
+    if (expectedNonce && !input.message.includes(expectedNonce)) return 'message_mismatch';
+    // fullMessage is display metadata from the wallet. If present, it must
+    // describe the same signed message/nonce, but signature verification is
+    // performed over the exact returned message.
+    if (input.fullMessage) {
+      if (!input.fullMessage.includes(input.message)) return 'message_not_in_signed_payload';
+      if (expectedNonce && !input.fullMessage.includes(expectedNonce)) return 'message_not_in_signed_payload';
+    }
     const publicKey = parseEd25519PublicKey(input.publicKey);
     if (!publicKey) return 'unsupported_public_key';
     const signature = new Ed25519Signature(input.signature);
-    const signedBytes = new TextEncoder().encode(input.fullMessage);
+    const signedBytes = new TextEncoder().encode(input.message);
     if (!publicKey.verifySignature({ message: signedBytes, signature })) {
       return 'signature_invalid';
     }
@@ -93,6 +101,14 @@ export function explainSignatureFailure(
 
 export const verifyWalletSignature: SignatureVerifier = (input, expected) =>
   explainSignatureFailure(input, expected) === null;
+
+function extractLoginNonce(message: string): string | null {
+  const currentPrefix = `${LOGIN_MESSAGE}. Nonce: `;
+  if (message.startsWith(currentPrefix)) return message.slice(currentPrefix.length);
+  const legacyPrefix = `${LOGIN_MESSAGE}\nNonce: `;
+  if (message.startsWith(legacyPrefix)) return message.slice(legacyPrefix.length);
+  return null;
+}
 
 /** Accepts a raw 32-byte Ed25519 key or a BCS-serialized AnyPublicKey wrapping one. */
 function parseEd25519PublicKey(raw: string): Ed25519PublicKey | null {

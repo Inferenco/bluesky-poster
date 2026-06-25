@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import { Account, SigningSchemeInput } from '@cedra-labs/ts-sdk';
 import {
+  buildLegacyLoginMessage,
   buildLoginMessage,
   explainSignatureFailure,
   generateNonce,
@@ -13,7 +14,7 @@ import {
 const ZERO = '0x' + '0'.repeat(64);
 
 function buildFullMessage(address: string, nonce: string, message: string): string {
-  // Mirrors the Nova wallet adapter's createFullMessage.
+  // Mirrors Nova Connect mobile fullMessage metadata.
   return ['CEDRA', '', address, nonce, '', message].join('\n');
 }
 
@@ -23,7 +24,7 @@ function signedInput(overrides: Partial<VerifyInput> = {}): { input: VerifyInput
   const message = buildLoginMessage(nonce);
   const address = account.accountAddress.toString();
   const fullMessage = overrides.fullMessage ?? buildFullMessage(address, nonce, message);
-  const signature = account.sign(new TextEncoder().encode(fullMessage));
+  const signature = account.sign(new TextEncoder().encode(message));
   return {
     message,
     input: {
@@ -39,9 +40,26 @@ function signedInput(overrides: Partial<VerifyInput> = {}): { input: VerifyInput
 }
 
 describe('verifyWalletSignature', () => {
-  test('accepts a valid signature from the address owner', () => {
+  test('accepts a valid one-line signature from the address owner', () => {
     const { input, message } = signedInput();
     expect(verifyWalletSignature(input, { message })).toBe(true);
+  });
+
+  test('accepts the legacy newline login message', () => {
+    const account = Account.generate();
+    const nonce = generateNonce();
+    const message = buildLegacyLoginMessage(nonce);
+    const address = account.accountAddress.toString();
+    const signature = account.sign(new TextEncoder().encode(message));
+    const input: VerifyInput = {
+      message,
+      nonce,
+      fullMessage: buildFullMessage(address, nonce, message),
+      signature: signature.toString(),
+      publicKey: account.publicKey.toString(),
+      address
+    };
+    expect(explainSignatureFailure(input, { message: buildLoginMessage(nonce) })).toBeNull();
   });
 
   test('accepts a wallet that signs the bare message as fullMessage (Nova Desk)', () => {
@@ -70,9 +88,26 @@ describe('verifyWalletSignature', () => {
     expect(explainSignatureFailure(input, { message })).toBe('message_not_in_signed_payload');
   });
 
+  test('rejects when the returned message omits the nonce', () => {
+    const account = Account.generate();
+    const nonce = generateNonce();
+    const message = 'Sign in to the Inferenco poster dashboard';
+    const address = account.accountAddress.toString();
+    const signature = account.sign(new TextEncoder().encode(message));
+    const input: VerifyInput = {
+      message,
+      nonce,
+      fullMessage: buildFullMessage(address, nonce, message),
+      signature: signature.toString(),
+      publicKey: account.publicKey.toString(),
+      address
+    };
+    expect(explainSignatureFailure(input, { message: buildLoginMessage(nonce) })).toBe('message_mismatch');
+  });
+
   test('rejects a tampered message', () => {
     const { input, message } = signedInput();
-    const tampered = { ...input, fullMessage: input.fullMessage + ' (tampered)' };
+    const tampered = { ...input, message: input.message + ' (tampered)' };
     expect(verifyWalletSignature(tampered, { message })).toBe(false);
   });
 
@@ -81,7 +116,7 @@ describe('verifyWalletSignature', () => {
     const other = Account.generate();
     const forged = {
       ...input,
-      signature: other.sign(new TextEncoder().encode(input.fullMessage)).toString()
+      signature: other.sign(new TextEncoder().encode(input.message)).toString()
     };
     expect(verifyWalletSignature(forged, { message })).toBe(false);
   });
