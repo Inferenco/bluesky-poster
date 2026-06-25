@@ -20,6 +20,8 @@ const statusEl = document.getElementById('wallet-status') as HTMLElement;
 const AUTH_REQUEST_TIMEOUT_MS = 10_000;
 const PENDING_LOGIN_KEY = 'inferenco_poster_pending_wallet_login';
 const PENDING_LOGIN_MAX_AGE_MS = 10 * 60_000;
+const RESUME_TIMEOUT_MS = 8_000;
+const RESUME_POLL_MS = 250;
 
 interface LoginChallenge {
   nonce: string;
@@ -32,6 +34,8 @@ interface PendingLogin {
   startedAt: number;
   challenge?: LoginChallenge;
 }
+
+let resumeInFlight: Promise<void> | null = null;
 
 function setStatus(text: string, isError = false): void {
   statusEl.textContent = text;
@@ -148,6 +152,14 @@ async function signIn(
 }
 
 async function resumePendingLogin(): Promise<void> {
+  if (resumeInFlight) return resumeInFlight;
+  resumeInFlight = resumePendingLoginOnce().finally(() => {
+    resumeInFlight = null;
+  });
+  return resumeInFlight;
+}
+
+async function resumePendingLoginOnce(): Promise<void> {
   const pending = readPendingLogin();
   if (!pending) {
     void tryResumeNovaWalletConnection(core);
@@ -156,7 +168,7 @@ async function resumePendingLogin(): Promise<void> {
 
   try {
     setStatus('Restoring Nova Connect session...');
-    await tryResumeNovaWalletConnection(core);
+    await waitForResumedConnection();
     if (pending.stage === 'sign' && pending.challenge) {
       await signIn(pending.walletName, {
         useExistingConnection: true,
@@ -171,21 +183,30 @@ async function resumePendingLogin(): Promise<void> {
   }
 }
 
+async function waitForResumedConnection(): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < RESUME_TIMEOUT_MS) {
+    await tryResumeNovaWalletConnection(core);
+    if (core.isConnected()) return;
+    await delay(RESUME_POLL_MS);
+  }
+}
+
 function rememberPendingLogin(input: Omit<PendingLogin, 'startedAt'>): void {
   try {
-    sessionStorage.setItem(PENDING_LOGIN_KEY, JSON.stringify({
+    localStorage.setItem(PENDING_LOGIN_KEY, JSON.stringify({
       ...input,
       startedAt: Date.now()
     } satisfies PendingLogin));
   } catch {
-    // Session storage may be unavailable in restricted browsers; login can
+    // Local storage may be unavailable in restricted browsers; login can
     // still continue while the current page remains alive.
   }
 }
 
 function readPendingLogin(): PendingLogin | null {
   try {
-    const raw = sessionStorage.getItem(PENDING_LOGIN_KEY);
+    const raw = localStorage.getItem(PENDING_LOGIN_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as PendingLogin;
     if (!parsed.walletName || Date.now() - parsed.startedAt > PENDING_LOGIN_MAX_AGE_MS) {
@@ -201,10 +222,14 @@ function readPendingLogin(): PendingLogin | null {
 
 function clearPendingLogin(): void {
   try {
-    sessionStorage.removeItem(PENDING_LOGIN_KEY);
+    localStorage.removeItem(PENDING_LOGIN_KEY);
   } catch {
     // no-op
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
@@ -233,3 +258,8 @@ async function readAuthError(response: Response): Promise<string | null> {
 core.on('standardWalletsAdded', renderWalletButtons);
 renderWalletButtons();
 void resumePendingLogin();
+window.addEventListener('pageshow', () => { void resumePendingLogin(); });
+window.addEventListener('focus', () => { void resumePendingLogin(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') void resumePendingLogin();
+});
