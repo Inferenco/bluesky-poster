@@ -20,8 +20,6 @@ const statusEl = document.getElementById('wallet-status') as HTMLElement;
 const AUTH_REQUEST_TIMEOUT_MS = 10_000;
 const PENDING_LOGIN_KEY = 'inferenco_poster_pending_wallet_login';
 const PENDING_LOGIN_MAX_AGE_MS = 10 * 60_000;
-const RESUME_TIMEOUT_MS = 8_000;
-const RESUME_POLL_MS = 250;
 
 interface LoginChallenge {
   nonce: string;
@@ -34,8 +32,6 @@ interface PendingLogin {
   startedAt: number;
   challenge?: LoginChallenge;
 }
-
-let resumeInFlight: Promise<void> | null = null;
 
 function setStatus(text: string, isError = false): void {
   statusEl.textContent = text;
@@ -75,7 +71,8 @@ async function signIn(
   const allButtons = buttonsEl.querySelectorAll('button');
   allButtons.forEach(b => { b.disabled = true; });
   try {
-    if (!options.useExistingConnection) {
+    const useCurrentConnection = options.useExistingConnection || core.isConnected();
+    if (!useCurrentConnection) {
       setStatus('Connecting wallet...');
       rememberPendingLogin({ walletName, stage: 'connect' });
       // A resumed session may point at a previously used account; drop it so
@@ -100,6 +97,10 @@ async function signIn(
     }
 
     let challenge = options.challenge;
+    const pending = readPendingLogin();
+    if (!challenge && pending?.stage === 'sign' && pending.walletName === walletName) {
+      challenge = pending.challenge;
+    }
     if (!challenge) {
       setStatus('Requesting login challenge...');
       const nonceRes = await fetchWithTimeout('/api/auth/nonce');
@@ -152,14 +153,6 @@ async function signIn(
 }
 
 async function resumePendingLogin(): Promise<void> {
-  if (resumeInFlight) return resumeInFlight;
-  resumeInFlight = resumePendingLoginOnce().finally(() => {
-    resumeInFlight = null;
-  });
-  return resumeInFlight;
-}
-
-async function resumePendingLoginOnce(): Promise<void> {
   const pending = readPendingLogin();
   if (!pending) {
     void tryResumeNovaWalletConnection(core);
@@ -168,27 +161,19 @@ async function resumePendingLoginOnce(): Promise<void> {
 
   try {
     setStatus('Restoring Nova Connect session...');
-    await waitForResumedConnection();
-    if (pending.stage === 'sign' && pending.challenge) {
-      await signIn(pending.walletName, {
-        useExistingConnection: true,
-        challenge: pending.challenge
-      });
+    await tryResumeNovaWalletConnection(core);
+    if (core.isConnected()) {
+      setStatus(
+        pending.stage === 'sign'
+          ? 'Wallet connected. Tap Connect Nova Connect to continue signing in.'
+          : 'Wallet connected. Tap Connect Nova Connect to sign in.'
+      );
       return;
     }
-    await signIn(pending.walletName, { useExistingConnection: true });
+    setStatus('Return from Nova Wallet detected. Tap Connect Nova Connect to continue.');
   } catch {
     clearPendingLogin();
     setStatus('Could not restore the wallet session. Please connect again.', true);
-  }
-}
-
-async function waitForResumedConnection(): Promise<void> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < RESUME_TIMEOUT_MS) {
-    await tryResumeNovaWalletConnection(core);
-    if (core.isConnected()) return;
-    await delay(RESUME_POLL_MS);
   }
 }
 
@@ -228,10 +213,6 @@ function clearPendingLogin(): void {
   }
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   return fetch(input, {
     ...init,
@@ -258,8 +239,3 @@ async function readAuthError(response: Response): Promise<string | null> {
 core.on('standardWalletsAdded', renderWalletButtons);
 renderWalletButtons();
 void resumePendingLogin();
-window.addEventListener('pageshow', () => { void resumePendingLogin(); });
-window.addEventListener('focus', () => { void resumePendingLogin(); });
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') void resumePendingLogin();
-});
