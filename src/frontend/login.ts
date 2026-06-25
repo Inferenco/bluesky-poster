@@ -14,11 +14,24 @@ registerNovaWallet({
 });
 
 const core = new WalletCore([], { network: Network.TESTNET });
-void tryResumeNovaWalletConnection(core);
 
 const buttonsEl = document.getElementById('wallet-buttons') as HTMLElement;
 const statusEl = document.getElementById('wallet-status') as HTMLElement;
 const AUTH_REQUEST_TIMEOUT_MS = 10_000;
+const PENDING_LOGIN_KEY = 'inferenco_poster_pending_wallet_login';
+const PENDING_LOGIN_MAX_AGE_MS = 10 * 60_000;
+
+interface LoginChallenge {
+  nonce: string;
+  message: string;
+}
+
+interface PendingLogin {
+  walletName: string;
+  stage: 'connect' | 'sign';
+  startedAt: number;
+  challenge?: LoginChallenge;
+}
 
 function setStatus(text: string, isError = false): void {
   statusEl.textContent = text;
@@ -51,33 +64,48 @@ function renderWalletButtons(): void {
   }
 }
 
-async function signIn(walletName: string): Promise<void> {
+async function signIn(
+  walletName: string,
+  options: { useExistingConnection?: boolean; challenge?: LoginChallenge } = {}
+): Promise<void> {
   const allButtons = buttonsEl.querySelectorAll('button');
   allButtons.forEach(b => { b.disabled = true; });
   try {
-    setStatus('Connecting wallet...');
-    // A resumed session may point at a previously used account; drop it so
-    // the wallet prompts fresh (connect() also throws if already connected).
-    if (core.isConnected()) {
-      try {
-        await core.disconnect();
-      } catch {
-        // stale session — safe to continue with a fresh connect
+    if (!options.useExistingConnection) {
+      setStatus('Connecting wallet...');
+      rememberPendingLogin({ walletName, stage: 'connect' });
+      // A resumed session may point at a previously used account; drop it so
+      // the wallet prompts fresh (connect() also throws if already connected).
+      if (core.isConnected()) {
+        try {
+          await core.disconnect();
+        } catch {
+          // stale session - safe to continue with a fresh connect
+        }
       }
+      await core.connect(walletName);
+    } else if (!core.isConnected()) {
+      setStatus('Restoring wallet connection...');
+      rememberPendingLogin({ walletName, stage: 'connect' });
+      await core.connect(walletName);
     }
-    await core.connect(walletName);
+
     const account = core.account;
     if (!account) {
       throw new Error('Wallet did not return an account');
     }
 
-    setStatus('Requesting login challenge...');
-    const nonceRes = await fetchWithTimeout('/api/auth/nonce');
-    if (!nonceRes.ok) throw new Error('Could not get login challenge from server');
-    const { nonce, message } = (await nonceRes.json()) as { nonce: string; message: string };
+    let challenge = options.challenge;
+    if (!challenge) {
+      setStatus('Requesting login challenge...');
+      const nonceRes = await fetchWithTimeout('/api/auth/nonce');
+      if (!nonceRes.ok) throw new Error('Could not get login challenge from server');
+      challenge = (await nonceRes.json()) as LoginChallenge;
+    }
 
     setStatus('Waiting for signature...');
-    const signed = await core.signMessage({ message, nonce });
+    rememberPendingLogin({ walletName, stage: 'sign', challenge });
+    const signed = await core.signMessage({ message: challenge.message, nonce: challenge.nonce });
 
     setStatus('Verifying...');
     const verifyRes = await fetchWithTimeout('/api/auth/verify', {
@@ -94,9 +122,11 @@ async function signIn(walletName: string): Promise<void> {
     });
 
     if (verifyRes.ok) {
+      clearPendingLogin();
       window.location.href = '/';
       return;
     }
+    clearPendingLogin();
     if (verifyRes.status === 403) {
       setStatus('This wallet is not an admin of the treasury contract.', true);
     } else if (verifyRes.status === 502) {
@@ -106,6 +136,7 @@ async function signIn(walletName: string): Promise<void> {
       setStatus(error ? `Signature verification failed: ${error}` : 'Signature verification failed. Please try again.', true);
     }
   } catch (error) {
+    clearPendingLogin();
     if (error instanceof DOMException && error.name === 'TimeoutError') {
       setStatus('Verification timed out. Check the server logs and try again.', true);
     } else {
@@ -113,6 +144,66 @@ async function signIn(walletName: string): Promise<void> {
     }
   } finally {
     allButtons.forEach(b => { b.disabled = false; });
+  }
+}
+
+async function resumePendingLogin(): Promise<void> {
+  const pending = readPendingLogin();
+  if (!pending) {
+    void tryResumeNovaWalletConnection(core);
+    return;
+  }
+
+  try {
+    setStatus('Restoring Nova Connect session...');
+    await tryResumeNovaWalletConnection(core);
+    if (pending.stage === 'sign' && pending.challenge) {
+      await signIn(pending.walletName, {
+        useExistingConnection: true,
+        challenge: pending.challenge
+      });
+      return;
+    }
+    await signIn(pending.walletName, { useExistingConnection: true });
+  } catch {
+    clearPendingLogin();
+    setStatus('Could not restore the wallet session. Please connect again.', true);
+  }
+}
+
+function rememberPendingLogin(input: Omit<PendingLogin, 'startedAt'>): void {
+  try {
+    sessionStorage.setItem(PENDING_LOGIN_KEY, JSON.stringify({
+      ...input,
+      startedAt: Date.now()
+    } satisfies PendingLogin));
+  } catch {
+    // Session storage may be unavailable in restricted browsers; login can
+    // still continue while the current page remains alive.
+  }
+}
+
+function readPendingLogin(): PendingLogin | null {
+  try {
+    const raw = sessionStorage.getItem(PENDING_LOGIN_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PendingLogin;
+    if (!parsed.walletName || Date.now() - parsed.startedAt > PENDING_LOGIN_MAX_AGE_MS) {
+      clearPendingLogin();
+      return null;
+    }
+    return parsed;
+  } catch {
+    clearPendingLogin();
+    return null;
+  }
+}
+
+function clearPendingLogin(): void {
+  try {
+    sessionStorage.removeItem(PENDING_LOGIN_KEY);
+  } catch {
+    // no-op
   }
 }
 
@@ -141,3 +232,4 @@ async function readAuthError(response: Response): Promise<string | null> {
 
 core.on('standardWalletsAdded', renderWalletButtons);
 renderWalletButtons();
+void resumePendingLogin();
