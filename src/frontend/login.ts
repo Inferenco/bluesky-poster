@@ -141,8 +141,14 @@ async function signInConnectedWallet(): Promise<void> {
       return;
     }
 
-    setStatus('Waiting for signature...');
-    const signed = await core.signMessage({ message: challenge.message, nonce: challenge.nonce });
+    setStatus('Opening Nova Wallet for signature...');
+    const signed = await core.signMessage({
+      address: true,
+      application: true,
+      chainId: true,
+      message: challenge.message,
+      nonce: challenge.nonce
+    });
 
     setStatus('Verifying...');
     const verifyRes = await fetchWithTimeout('/api/auth/verify', {
