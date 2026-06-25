@@ -33,6 +33,9 @@ const SIGN_STATUS_POLL_MS = 1_000;
 const SIGN_STATUS_TIMEOUT_MS = 2 * 60_000;
 let loginChallenge: LoginChallenge | null = null;
 let loginChallengeRequest: Promise<LoginChallenge> | null = null;
+let mobileSignRequestRequest: Promise<PendingSignRequest | null> | null = null;
+let mobileSignRequestKey: string | null = null;
+let pendingSignResumeRequest: Promise<void> | null = null;
 const SIGN_REQUEST_OPENED = 'SIGN_REQUEST_OPENED';
 
 interface LoginChallenge {
@@ -44,12 +47,14 @@ interface PendingSignRequest {
   requestId: string;
   walletDeeplinkUrl: string;
   relayBaseUrl: string;
+  sessionId: string;
   sessionToken: string;
   sharedSecret: string;
   challenge: LoginChallenge;
   address: string;
   publicKey: string;
   createdAt: number;
+  openedAt?: number;
 }
 
 interface MobileRequestCreateResponse {
@@ -78,7 +83,7 @@ function renderWalletButtons(): void {
 
   buttonsEl.replaceChildren();
   const pendingSignRequest = readPendingSignRequest();
-  if (pendingSignRequest) {
+  if (pendingSignRequest?.openedAt) {
     const openButton = document.createElement('button');
     openButton.type = 'button';
     openButton.className = 'button primary';
@@ -98,8 +103,8 @@ function renderWalletButtons(): void {
     });
 
     buttonsEl.append(openButton, cancelButton);
-    setStatus('Signature request is pending. Open Nova Wallet to approve it, then return here.');
-    void resumePendingSignRequest().catch(error => {
+    setStatus('Waiting for Nova signature approval...');
+    void resumePendingSignRequestOnce().catch(error => {
       setStatus(describeError(error), true);
     });
     return;
@@ -110,11 +115,15 @@ function renderWalletButtons(): void {
     void prepareLoginChallenge().catch(error => {
       setStatus(describeError(error), true);
     });
+    void prepareMobileSignRequest(account).catch(error => {
+      setStatus(describeError(error), true);
+    });
+    const preparedSignRequest = loginChallenge ? readPendingSignRequestFor(account, loginChallenge) : null;
     const signButton = document.createElement('button');
     signButton.type = 'button';
     signButton.className = 'button primary';
     signButton.textContent = 'Sign in with Nova Wallet';
-    signButton.disabled = !loginChallenge;
+    signButton.disabled = !loginChallenge || (isMobile && !preparedSignRequest);
     signButton.addEventListener('click', () => {
       void signInConnectedWallet();
     });
@@ -129,9 +138,11 @@ function renderWalletButtons(): void {
 
     buttonsEl.append(signButton, disconnectButton);
     setStatus(
-      loginChallenge
-        ? `Wallet connected: ${shortAddress(String(account.address))}`
-        : 'Wallet connected. Preparing sign-in challenge...'
+      !loginChallenge
+        ? 'Wallet connected. Preparing sign-in challenge...'
+        : isMobile && !preparedSignRequest
+          ? 'Wallet connected. Preparing Nova signature request...'
+          : `Wallet connected: ${shortAddress(String(account.address))}`
     );
     return;
   }
@@ -181,6 +192,7 @@ async function disconnectWallet(): Promise<void> {
     // Already disconnected or stale wallet state; render from current core state.
   } finally {
     clearLoginChallenge();
+    clearPendingSignRequest();
     renderWalletButtons();
   }
 }
@@ -207,13 +219,27 @@ async function signInConnectedWallet(): Promise<void> {
 
     setStatus('Opening Nova Wallet for signature...');
     const signPayload = {
-      address: true,
-      application: true,
-      chainId: true,
       message: challenge.message,
       nonce: challenge.nonce
     };
-    const signed = await signMessageWithNova(signPayload, challenge, account);
+    if (isMobile) {
+      const pendingSignRequest = readPendingSignRequestFor(account, challenge);
+      if (!pendingSignRequest) {
+        setStatus('Nova signature request is still preparing. Please tap Sign in again in a moment.', true);
+        void prepareMobileSignRequest(account).catch(() => {
+          // The status above tells the user what to do.
+        });
+        return;
+      }
+      rememberPendingSignRequest({
+        ...pendingSignRequest,
+        openedAt: Date.now()
+      });
+      window.location.href = pendingSignRequest.walletDeeplinkUrl;
+      throw new Error(SIGN_REQUEST_OPENED);
+    }
+
+    const signed = await core.signMessage(signPayload);
 
     await verifySignedLogin(signed, {
       address: String(account.address),
@@ -238,15 +264,30 @@ async function signInConnectedWallet(): Promise<void> {
   }
 }
 
-async function signMessageWithNova(
-  input: Parameters<typeof core.signMessage>[0],
-  challenge: LoginChallenge,
+async function prepareMobileSignRequest(
   account: NonNullable<typeof core.account>
-): ReturnType<typeof core.signMessage> {
-  if (isMobile) {
-    const session = await readValidatedExternalSession();
-    if (session?.transport === 'mobile-relay' && session.dappSessionToken && session.sharedSecret) {
+): Promise<PendingSignRequest | null> {
+  if (!isMobile) return null;
+  const challenge = await prepareLoginChallenge();
+  const session = await readValidatedExternalSession();
+  if (session?.transport !== 'mobile-relay' || !session.dappSessionToken || !session.sharedSecret) {
+    clearPendingSignRequest();
+    return null;
+  }
+
+  const existing = readPendingSignRequestFor(account, challenge, session.sessionId);
+  if (existing) return existing;
+
+  const requestKey = buildMobileSignRequestKey(account, challenge, session.sessionId);
+  if (mobileSignRequestRequest && mobileSignRequestKey === requestKey) return mobileSignRequestRequest;
+
+  mobileSignRequestKey = requestKey;
+  mobileSignRequestRequest = (async () => {
       const relayBaseUrl = session.relayBaseUrl ?? MOBILE_RELAY_BASE_URL;
+      const input = {
+        message: challenge.message,
+        nonce: challenge.nonce
+      };
       const response = await fetchJsonWithTimeout<MobileRequestCreateResponse>(
         buildRelayUrl(relayBaseUrl, '/v1/requests'),
         AUTH_REQUEST_TIMEOUT_MS,
@@ -266,22 +307,35 @@ async function signMessageWithNova(
           })
         }
       );
-      rememberPendingSignRequest({
+      const pending: PendingSignRequest = {
         requestId: response.requestId,
         walletDeeplinkUrl: response.walletDeeplinkUrl,
         relayBaseUrl,
+        sessionId: session.sessionId,
         sessionToken: session.dappSessionToken,
         sharedSecret: session.sharedSecret,
         challenge,
         address: String(account.address),
         publicKey: String(account.publicKey),
         createdAt: Date.now()
-      });
-      window.location.href = response.walletDeeplinkUrl;
-      throw new Error(SIGN_REQUEST_OPENED);
-    }
-  }
-  return core.signMessage(input);
+      };
+      rememberPendingSignRequest(pending);
+      renderWalletButtons();
+      return pending;
+  })().finally(() => {
+    mobileSignRequestRequest = null;
+    mobileSignRequestKey = null;
+  });
+
+  return mobileSignRequestRequest;
+}
+
+async function resumePendingSignRequestOnce(): Promise<void> {
+  if (pendingSignResumeRequest) return pendingSignResumeRequest;
+  pendingSignResumeRequest = resumePendingSignRequest().finally(() => {
+    pendingSignResumeRequest = null;
+  });
+  return pendingSignResumeRequest;
 }
 
 async function resumePendingSignRequest(): Promise<void> {
@@ -381,6 +435,8 @@ async function fetchLoginChallenge(): Promise<LoginChallenge> {
 function clearLoginChallenge(): void {
   loginChallenge = null;
   loginChallengeRequest = null;
+  mobileSignRequestRequest = null;
+  mobileSignRequestKey = null;
 }
 
 function rememberPendingSignRequest(request: PendingSignRequest): void {
@@ -392,7 +448,18 @@ function readPendingSignRequest(): PendingSignRequest | null {
     const raw = localStorage.getItem(PENDING_SIGN_REQUEST_KEY);
     if (!raw) return null;
     const pending = JSON.parse(raw) as PendingSignRequest;
-    if (!pending.requestId || Date.now() - pending.createdAt > PENDING_SIGN_MAX_AGE_MS) {
+    if (
+      !pending.requestId ||
+      !pending.walletDeeplinkUrl ||
+      !pending.sessionId ||
+      !pending.sessionToken ||
+      !pending.sharedSecret ||
+      !pending.challenge?.nonce ||
+      !pending.challenge?.message ||
+      !pending.address ||
+      !pending.publicKey ||
+      Date.now() - pending.createdAt > PENDING_SIGN_MAX_AGE_MS
+    ) {
       clearPendingSignRequest();
       return null;
     }
@@ -403,8 +470,44 @@ function readPendingSignRequest(): PendingSignRequest | null {
   }
 }
 
+function readPendingSignRequestFor(
+  account: NonNullable<typeof core.account>,
+  challenge: LoginChallenge,
+  sessionId?: string
+): PendingSignRequest | null {
+  const pending = readPendingSignRequest();
+  if (!pending) return null;
+  if (
+    pending.address !== String(account.address) ||
+    pending.publicKey !== String(account.publicKey) ||
+    pending.challenge.nonce !== challenge.nonce ||
+    pending.challenge.message !== challenge.message ||
+    (sessionId !== undefined && pending.sessionId !== sessionId)
+  ) {
+    clearPendingSignRequest();
+    return null;
+  }
+  return pending;
+}
+
 function clearPendingSignRequest(): void {
   localStorage.removeItem(PENDING_SIGN_REQUEST_KEY);
+  mobileSignRequestRequest = null;
+  mobileSignRequestKey = null;
+}
+
+function buildMobileSignRequestKey(
+  account: NonNullable<typeof core.account>,
+  challenge: LoginChallenge,
+  sessionId: string
+): string {
+  return JSON.stringify({
+    address: String(account.address),
+    publicKey: String(account.publicKey),
+    nonce: challenge.nonce,
+    message: challenge.message,
+    sessionId
+  });
 }
 
 function buildRelayUrl(baseUrl: string, path: string): string {
