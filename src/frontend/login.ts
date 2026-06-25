@@ -19,6 +19,8 @@ void tryResumeNovaWalletConnection(core);
 const buttonsEl = document.getElementById('wallet-buttons') as HTMLElement;
 const statusEl = document.getElementById('wallet-status') as HTMLElement;
 const AUTH_REQUEST_TIMEOUT_MS = 10_000;
+let loginChallenge: LoginChallenge | null = null;
+let loginChallengeRequest: Promise<LoginChallenge> | null = null;
 
 interface LoginChallenge {
   nonce: string;
@@ -41,10 +43,14 @@ function renderWalletButtons(): void {
   buttonsEl.replaceChildren();
   if (core.isConnected() && core.account) {
     const account = core.account;
+    void prepareLoginChallenge().catch(error => {
+      setStatus(describeError(error), true);
+    });
     const signButton = document.createElement('button');
     signButton.type = 'button';
     signButton.className = 'button primary';
     signButton.textContent = 'Sign in with Nova Wallet';
+    signButton.disabled = !loginChallenge;
     signButton.addEventListener('click', () => {
       void signInConnectedWallet();
     });
@@ -58,7 +64,11 @@ function renderWalletButtons(): void {
     });
 
     buttonsEl.append(signButton, disconnectButton);
-    setStatus(`Wallet connected: ${shortAddress(String(account.address))}`);
+    setStatus(
+      loginChallenge
+        ? `Wallet connected: ${shortAddress(String(account.address))}`
+        : 'Wallet connected. Preparing sign-in challenge...'
+    );
     return;
   }
 
@@ -85,6 +95,7 @@ async function connectWallet(walletName: string): Promise<void> {
   try {
     setStatus('Connecting wallet...');
     await core.connect(walletName);
+    await prepareLoginChallenge();
     renderWalletButtons();
     setStatus('Wallet connected. Tap Sign in with Nova Wallet to continue.');
   } catch (error) {
@@ -105,6 +116,7 @@ async function disconnectWallet(): Promise<void> {
   } catch {
     // Already disconnected or stale wallet state; render from current core state.
   } finally {
+    clearLoginChallenge();
     renderWalletButtons();
   }
 }
@@ -122,10 +134,12 @@ async function signInConnectedWallet(): Promise<void> {
       throw new Error('Wallet did not return an account');
     }
 
-    setStatus('Requesting login challenge...');
-    const nonceRes = await fetchWithTimeout('/api/auth/nonce');
-    if (!nonceRes.ok) throw new Error('Could not get login challenge from server');
-    const challenge = (await nonceRes.json()) as LoginChallenge;
+    const challenge = loginChallenge;
+    if (!challenge) {
+      setStatus('Sign-in challenge is still loading. Please try again.', true);
+      void prepareLoginChallenge();
+      return;
+    }
 
     setStatus('Waiting for signature...');
     const signed = await core.signMessage({ message: challenge.message, nonce: challenge.nonce });
@@ -148,6 +162,7 @@ async function signInConnectedWallet(): Promise<void> {
       window.location.href = '/';
       return;
     }
+    clearLoginChallenge();
     if (verifyRes.status === 403) {
       setStatus('This wallet is not an admin of the treasury contract.', true);
     } else if (verifyRes.status === 502) {
@@ -157,6 +172,10 @@ async function signInConnectedWallet(): Promise<void> {
       setStatus(error ? `Signature verification failed: ${error}` : 'Signature verification failed. Please try again.', true);
     }
   } catch (error) {
+    clearLoginChallenge();
+    void prepareLoginChallenge().catch(() => {
+      // The original signing error is more useful to show here.
+    });
     if (error instanceof DOMException && error.name === 'TimeoutError') {
       setStatus('Verification timed out. Check the server logs and try again.', true);
     } else {
@@ -165,6 +184,32 @@ async function signInConnectedWallet(): Promise<void> {
   } finally {
     allButtons.forEach(b => { b.disabled = false; });
   }
+}
+
+async function prepareLoginChallenge(): Promise<LoginChallenge> {
+  if (loginChallenge) return loginChallenge;
+  if (loginChallengeRequest) return loginChallengeRequest;
+  loginChallengeRequest = fetchLoginChallenge()
+    .then(challenge => {
+      loginChallenge = challenge;
+      renderWalletButtons();
+      return challenge;
+    })
+    .finally(() => {
+      loginChallengeRequest = null;
+    });
+  return loginChallengeRequest;
+}
+
+async function fetchLoginChallenge(): Promise<LoginChallenge> {
+  const nonceRes = await fetchWithTimeout('/api/auth/nonce');
+  if (!nonceRes.ok) throw new Error('Could not get login challenge from server');
+  return (await nonceRes.json()) as LoginChallenge;
+}
+
+function clearLoginChallenge(): void {
+  loginChallenge = null;
+  loginChallengeRequest = null;
 }
 
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
