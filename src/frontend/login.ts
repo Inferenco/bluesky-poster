@@ -2,7 +2,12 @@
 import { WalletCore } from '@cedra-labs/wallet-adapter-core';
 import { Network } from '@cedra-labs/ts-sdk';
 import { registerNovaWallet } from '@inferenco/nova-wallet-adapter/aip62';
-import { tryResumeNovaWalletConnection, NOVA_CONNECT_NAME } from '@inferenco/nova-wallet-adapter';
+import {
+  tryResumeNovaWalletConnection,
+  readValidatedExternalSession,
+  signMessageViaMobileRelay,
+  NOVA_CONNECT_NAME
+} from '@inferenco/nova-wallet-adapter';
 
 const isMobile = /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent);
 
@@ -142,13 +147,14 @@ async function signInConnectedWallet(): Promise<void> {
     }
 
     setStatus('Opening Nova Wallet for signature...');
-    const signed = await core.signMessage({
+    const signPayload = {
       address: true,
       application: true,
       chainId: true,
       message: challenge.message,
       nonce: challenge.nonce
-    });
+    };
+    const signed = await signMessageWithNova(signPayload);
 
     setStatus('Verifying...');
     const verifyRes = await fetchWithTimeout('/api/auth/verify', {
@@ -190,6 +196,16 @@ async function signInConnectedWallet(): Promise<void> {
   } finally {
     allButtons.forEach(b => { b.disabled = false; });
   }
+}
+
+async function signMessageWithNova(input: Parameters<typeof core.signMessage>[0]): ReturnType<typeof core.signMessage> {
+  if (isMobile) {
+    const session = await readValidatedExternalSession();
+    if (session?.transport === 'mobile-relay') {
+      return signMessageViaMobileRelay(input, session);
+    }
+  }
+  return core.signMessage(input);
 }
 
 async function prepareLoginChallenge(): Promise<LoginChallenge> {
