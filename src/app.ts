@@ -70,6 +70,7 @@ export interface AppRepositories {
     listPublished(options?: { limit?: number; offset?: number }): Promise<{ blogs: BlogRecord[]; total: number }>;
     setPublishedAt(id: string, publishedAt: Date | string | null): Promise<void>;
     reorderAssets(blogId: string, assetId: string, newPosition: number): Promise<void>;
+    isAssetPublished(assetId: string): Promise<boolean>;
   };
 }
 
@@ -249,18 +250,7 @@ export async function buildApp(options: {
           excerpt,
           published_at: blog.published_at,
           assets: assets.map(asset => {
-            // Construct public URL for assets - keep relative for frontend to prepend base URL
-            let publicUrl = asset.public_url;
-            if (!publicUrl) {
-              if (asset.storage_kind === 'object_storage' && asset.path_or_object_key) {
-                publicUrl = asset.path_or_object_key;
-              } else if (asset.path_or_object_key) {
-                const filename = asset.path_or_object_key.split('/').pop();
-                publicUrl = `/public/${filename}`;
-              } else if (asset.storage_kind === 'database') {
-                publicUrl = `/public/assets/${asset.id}`;
-              }
-            }
+            const publicUrl = '/public/assets/' + encodeURIComponent(asset.id);
             return {
               id: asset.id,
               alt_text: asset.alt_text_default,
@@ -306,18 +296,7 @@ export async function buildApp(options: {
         created_at: blog.created_at,
         updated_at: blog.updated_at,
         assets: assets.map(asset => {
-          // Construct public URL for assets - keep relative for frontend to prepend base URL
-          let publicUrl = asset.public_url;
-          if (!publicUrl) {
-            if (asset.storage_kind === 'object_storage' && asset.path_or_object_key) {
-              publicUrl = asset.path_or_object_key;
-            } else if (asset.path_or_object_key) {
-              const filename = asset.path_or_object_key.split('/').pop();
-              publicUrl = `/public/${filename}`;
-            } else if (asset.storage_kind === 'database') {
-              publicUrl = `/public/assets/${asset.id}`;
-            }
-          }
+          const publicUrl = '/public/assets/' + encodeURIComponent(asset.id);
           return {
             id: asset.id,
             alt_text: asset.alt_text_default,
@@ -631,6 +610,9 @@ export async function buildApp(options: {
 
   // Public asset endpoint for serving assets to the frontend
   app.get<{ Params: { id: string } }>('/public/assets/:id', async (request, reply) => {
+    if (!await options.repositories.blogs.isAssetPublished(request.params.id)) {
+      return reply.code(404).send('Asset not found');
+    }
     const asset = await options.repositories.assets.get(request.params.id);
     if (!asset) return reply.code(404).send('Asset not found');
 
@@ -638,7 +620,7 @@ export async function buildApp(options: {
       const buffer = await readAssetPreview(asset);
       if (!buffer) return reply.code(404).send('Asset not available');
       return reply
-        .header('cache-control', 'public, max-age=3600')
+        .header('cache-control', 'no-store')
         .header('access-control-allow-origin', '*')
         .header('access-control-allow-methods', 'GET')
         .header('access-control-allow-headers', 'Content-Type')
@@ -667,6 +649,13 @@ export async function buildApp(options: {
         `Cannot delete: ${refCount} message${refCount === 1 ? ' is' : 's are'} still using this asset.`
       );
       return reply.redirect(`/assets?error=${msg}`);
+    }
+    const blogRefCount = await options.repositories.blogs.countReferencingAsset(assetId);
+    if (blogRefCount > 0) {
+      const msg = encodeURIComponent(
+        'Cannot delete: ' + blogRefCount + ' blog(s) still use this asset.'
+      );
+      return reply.redirect('/assets?error=' + msg);
     }
     await options.repositories.assets.delete(assetId);
     return reply.redirect('/assets');
@@ -1315,6 +1304,14 @@ function formatBlogDate(value: Date | string | null): string {
   });
 }
 
+function blogPreviewDocument(html: string): string {
+  return '<!doctype html><meta charset="utf-8"><style>' +
+    'body{font:14px/1.6 system-ui,sans-serif;background:#070812;color:#f7fbff;padding:16px;margin:0}' +
+    'img{max-width:100%;height:auto}a{color:#12d7ff}pre{overflow:auto;background:#111827;padding:12px}' +
+    'blockquote{border-left:3px solid #12d7ff;margin-left:0;padding-left:12px}' +
+    '</style>' + html;
+}
+
 function renderBlogForm(action: string, assets: AssetRecord[], blog?: BlogRecord & { assets?: AssetRecord[] }, assetOtherRefCounts?: number[]): string {
   const assetOptions = [
     `<option value="">No image asset</option>`,
@@ -1355,7 +1352,7 @@ function renderBlogForm(action: string, assets: AssetRecord[], blog?: BlogRecord
                   ${refNote}
                   <button type="button" class="button danger" onclick="removeAssetFromBlog(this)">${icon('trash')}<span>Remove</span></button>
                 </div>`;
-              }).join('') : '<div class="muted">No assets selected</div>'}
+              }).join('') : '<div class="muted" data-empty-assets>No assets selected</div>'}
             </div>
           </label>
         </div>
@@ -1363,7 +1360,7 @@ function renderBlogForm(action: string, assets: AssetRecord[], blog?: BlogRecord
         <!-- Markdown Preview -->
         <div class="form-grid">
           <label class="full">Preview
-            <div id="markdownPreview" class="markdown-preview">${blog?.content ? marked.parse(blog.content) : '<div class="muted">Preview will appear here...</div>'}</div>
+            <iframe id="markdownPreview" class="markdown-preview" title="Markdown preview" sandbox="" referrerpolicy="no-referrer" srcdoc="${escapeHtml(blog?.content ? blogPreviewDocument(String(marked.parse(blog.content))) : 'Preview will appear here...')}"></iframe>
           </label>
         </div>
         
@@ -1371,10 +1368,10 @@ function renderBlogForm(action: string, assets: AssetRecord[], blog?: BlogRecord
       </form>
     </div>
   </section>
-  <script src="https://unpkg.com/marked@15/marked.min.js"></script>
+  <script src="/public/marked.js"></script>
   <script>
   // Asset data for client-side use
-  const allAssets = ${JSON.stringify(assets.map(a => ({ id: a.id, alt_text_default: a.alt_text_default })))}; 
+  const allAssets = ${JSON.stringify(assets.map(a => ({ id: a.id, alt_text_default: a.alt_text_default }))).replace(/</g, '\\u003c')};
 
   // Asset management functions (must be global for onclick handlers)
   function addAssetToBlog() {
@@ -1397,8 +1394,14 @@ function renderBlogForm(action: string, assets: AssetRecord[], blog?: BlogRecord
     const assetDiv = document.createElement('div');
     assetDiv.className = 'selected-asset';
     assetDiv.dataset.assetId = asset.id;
-    assetDiv.innerHTML = '<span>' + asset.alt_text_default + '</span>' +
-      '<button type="button" class="button danger" onclick="removeAssetFromBlog(this)">Remove</button>';
+    const label = document.createElement('span');
+    label.textContent = asset.alt_text_default;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'button danger';
+    remove.textContent = 'Remove';
+    remove.addEventListener('click', () => removeAssetFromBlog(remove));
+    assetDiv.append(label, remove);
     selectedAssets.appendChild(assetDiv);
     
     // Update the hidden input with all selected asset IDs
@@ -1425,8 +1428,20 @@ function renderBlogForm(action: string, assets: AssetRecord[], blog?: BlogRecord
       const assetDivs = selectedAssetsDiv.querySelectorAll('.selected-asset[data-asset-id]');
       const assetIds = Array.from(assetDivs).map(div => div.dataset.assetId);
       input.value = JSON.stringify(assetIds);
+      const empty = selectedAssetsDiv.querySelector('[data-empty-assets]');
+      if (assetIds.length > 0) {
+        empty?.remove();
+      } else if (!empty) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'muted';
+        placeholder.dataset.emptyAssets = '';
+        placeholder.textContent = 'No assets selected';
+        selectedAssetsDiv.appendChild(placeholder);
+      }
     }
   }
+
+  const previewStyles = ${JSON.stringify(blogPreviewDocument(''))};
 
   // Live markdown preview
   document.addEventListener('DOMContentLoaded', function() {
@@ -1438,19 +1453,19 @@ function renderBlogForm(action: string, assets: AssetRecord[], blog?: BlogRecord
     if (!preview || !content) return;
     const markdown = content.value;
     if (!markdown.trim()) {
-      preview.innerHTML = '<div class="muted">Preview will appear here...</div>';
+      preview.srcdoc = 'Preview will appear here...';
       return;
     }
     
     // Use marked library for preview
     try {
       if (typeof marked !== 'undefined') {
-        preview.innerHTML = marked.parse ? marked.parse(markdown) : marked(markdown);
+        preview.srcdoc = previewStyles + (marked.parse ? marked.parse(markdown) : marked(markdown));
       } else {
-        preview.innerHTML = '<div class="muted">marked library not loaded</div>';
+        preview.srcdoc = 'Markdown preview is unavailable.';
       }
     } catch (e) {
-      preview.innerHTML = '<div class="muted">Preview error: ' + (e.message || String(e)) + '</div>';
+      preview.srcdoc = 'Markdown preview is unavailable.';
     }
   }
   
@@ -1466,11 +1481,12 @@ function renderBlogForm(action: string, assets: AssetRecord[], blog?: BlogRecord
   </script>
   <style>
     .markdown-preview {
+      width: 100%;
+      min-height: 260px;
       border: 1px solid rgba(68, 103, 154, 0.42);
       border-radius: 8px;
       background: rgba(7, 8, 18, 0.76);
       padding: 16px;
-      min-height: 200px;
       max-height: 400px;
       overflow-y: auto;
       color: var(--text);

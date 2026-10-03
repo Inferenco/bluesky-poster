@@ -51,12 +51,13 @@ export class BlogsRepository {
 
   async create(input: CreateBlogInput): Promise<BlogRecord> {
     const id = this.createId();
+    const status = input.status ?? 'draft';
     const values = [
       id,
       input.title,
       input.content,
-      input.status ?? 'draft',
-      input.publishedAt ?? null
+      status,
+      input.publishedAt ?? (status === 'published' ? new Date() : null)
     ];
 
     const result = await this.db.query<BlogRecord>(
@@ -131,6 +132,10 @@ export class BlogsRepository {
   async update(id: string, input: UpdateBlogInput): Promise<BlogRecord> {
     const current = await this.get(id);
     if (!current) throw new Error('blog not found');
+    const status = input.status ?? current.status;
+    const publishedAt = status === 'published'
+      ? input.publishedAt ?? current.published_at ?? new Date()
+      : null;
 
     const result = await this.db.query<BlogRecord>(
       `update blogs set
@@ -145,8 +150,8 @@ export class BlogsRepository {
         id,
         input.title ?? current.title,
         input.content ?? current.content,
-        input.status ?? current.status,
-        input.publishedAt !== undefined ? input.publishedAt : current.published_at
+        status,
+        publishedAt
       ]
     );
 
@@ -154,11 +159,15 @@ export class BlogsRepository {
   }
 
   async setStatus(id: string, status: BlogStatus): Promise<void> {
-    // If setting to published, set published_at to now
+    // Preserve the publication date when publishing an already-published blog.
     const publishedAt = status === 'published' ? new Date() : null;
     
     await this.db.query(
-      `update blogs set status = $2, published_at = $3, updated_at = now() where id = $1`,
+      `update blogs set
+        status = $2,
+        published_at = case when $2 = 'published' then coalesce(published_at, $3) else null end,
+        updated_at = now()
+       where id = $1`,
       [id, status, publishedAt]
     );
   }
@@ -184,7 +193,7 @@ export class BlogsRepository {
     if (existing.rows.length > 0) {
       // Update position if it already exists
       await this.db.query(
-        `update blog_assets set position = $3, updated_at = now() where blog_id = $1 and asset_id = $2`,
+        `update blog_assets set position = $3 where blog_id = $1 and asset_id = $2`,
         [blogId, assetId, position]
       );
     } else {
@@ -219,6 +228,18 @@ export class BlogsRepository {
       `update blog_assets set position = $3 where blog_id = $1 and asset_id = $2`,
       [blogId, assetId, newPosition]
     );
+  }
+
+  async isAssetPublished(assetId: string): Promise<boolean> {
+    const result = await this.db.query<{ published: boolean }>(
+      `select exists (
+        select 1 from blog_assets ba
+        join blogs b on b.id = ba.blog_id
+        where ba.asset_id = $1 and b.status = $2
+      ) as published`,
+      [assetId, 'published']
+    );
+    return result.rows[0]?.published ?? false;
   }
 
   async countReferencingAsset(assetId: string): Promise<number> {
