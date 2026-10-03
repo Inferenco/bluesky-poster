@@ -2,6 +2,7 @@ export interface AppConfig {
   databaseUrl: string;
   port: number;
   dryRun: boolean;
+  corsOrigin: string | string[];
   auth: {
     cedraFullnodeUrl: string;
     adminContractAddress: string;
@@ -30,10 +31,15 @@ export type MastodonVisibility = 'public' | 'unlisted' | 'private' | 'direct';
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const databaseUrl = required(env, 'DATABASE_URL');
 
+  // Parse CORS_ORIGIN - can be comma-separated list or '*'
+  const corsOriginRaw = env.CORS_ORIGIN?.trim() || '*';
+  const corsOrigin = corsOriginRaw === '*' ? '*' : corsOriginRaw.split(',').map(s => s.trim());
+
   return {
     databaseUrl,
     port: parsePort(env.PORT),
     dryRun: asBoolean(env.DRY_RUN),
+    corsOrigin,
     auth: {
       cedraFullnodeUrl: env.CEDRA_FULLNODE_URL?.trim() || 'https://testnet.cedra.dev/v1',
       adminContractAddress:

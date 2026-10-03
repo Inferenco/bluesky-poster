@@ -6,6 +6,7 @@ import { buildApp, type AppRepositories } from '../app.js';
 import type { SignatureVerifier } from '../auth/cedraAuth.js';
 import type { AssetRecord } from '../repositories/assets.js';
 import type { MessageRecord, MessageStatus } from '../repositories/messages.js';
+import type { BlogRecord, BlogStatus, CreateBlogInput } from '../repositories/blogs.js';
 import type { PostGenerator } from '../services/postGenerator.js';
 
 vi.mock('../replit_integrations/object_storage.js', () => ({
@@ -95,6 +96,19 @@ function makeMessage(overrides: Partial<MessageRecord> = {}): MessageRecord {
     post_count: overrides.post_count ?? 0,
     created_at: overrides.created_at ?? new Date('2026-05-29T10:00:00.000Z'),
     updated_at: overrides.updated_at ?? new Date('2026-05-29T10:00:00.000Z')
+  };
+}
+
+function makeBlog(overrides: Partial<BlogRecord> = {}): BlogRecord {
+  return {
+    id: overrides.id ?? 'blog-1',
+    title: overrides.title ?? 'Test Blog',
+    content: overrides.content ?? '# Test Blog Content',
+    status: overrides.status ?? 'draft',
+    published_at: overrides.published_at ?? null,
+    created_at: overrides.created_at ?? new Date('2026-05-29T10:00:00.000Z'),
+    updated_at: overrides.updated_at ?? new Date('2026-05-29T10:00:00.000Z'),
+    assets: overrides.assets ?? []
   };
 }
 
@@ -229,6 +243,21 @@ function repositories(): AppRepositories {
     },
     runs: {
       list: async () => []
+    },
+    blogs: {
+      list: async () => [],
+      get: async (id) => null,
+      create: async (input: CreateBlogInput) => makeBlog({ ...input, id: `blog-${Math.random().toString(36).substr(2, 9)}` }),
+      update: async (id, input) => makeBlog({ ...input, id }),
+      setStatus: async (id, status: BlogStatus) => {},
+      delete: async (id) => {},
+      addAsset: async (blogId, assetId, position) => {},
+      removeAsset: async (blogId, assetId) => {},
+      getBlogAssets: async (blogId) => [],
+      countReferencingAsset: async (assetId) => 0,
+      listPublished: async ({ limit, offset } = {}) => ({ blogs: [], total: 0 }),
+      setPublishedAt: async (id, publishedAt) => {},
+      reorderAssets: async (blogId, assetId, newPosition) => {}
     }
   };
 }

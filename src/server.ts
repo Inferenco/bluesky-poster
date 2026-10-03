@@ -11,6 +11,7 @@ import { PgLockRepository } from './repositories/locks.js';
 import { MessagesRepository } from './repositories/messages.js';
 import { RunsRepository } from './repositories/runs.js';
 import { SettingsRepository } from './repositories/settings.js';
+import { BlogsRepository } from './repositories/blogs.js';
 import { OpenAIInferencoPostGenerator } from './services/postGenerator.js';
 import { PosterService, type PlatformPublisher } from './services/poster.js';
 import { SchedulerService } from './services/scheduler.js';
@@ -26,6 +27,7 @@ async function main(): Promise<void> {
   const settings = new SettingsRepository(pool);
   const runs = new RunsRepository(pool);
   const locks = new PgLockRepository(pool);
+  const blogs = new BlogsRepository(pool);
 
   let blueskyPublisher: PlatformPublisher;
   if (config.bluesky.identifier && config.bluesky.appPassword) {
@@ -75,7 +77,8 @@ async function main(): Promise<void> {
       messages,
       assets,
       settings,
-      runs
+      runs,
+      blogs
     },
     postGenerator: config.ai.openaiApiKey
       ? new OpenAIInferencoPostGenerator({
