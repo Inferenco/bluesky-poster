@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "npm run build:client && node ./node_modules/tsx/dist/cli.mjs watch src/server.ts",
-    "build:client": "esbuild src/frontend/login.ts --bundle --format=iife --minify --alias:@cedra-labs/wallet-adapter-plugin=./node_modules/@cedra-labs/wallet-adapter-plugin/src/index.ts --outfile=public/login.js",
+    "build:client": "esbuild src/frontend/login.ts --bundle --format=iife --minify --alias:@cedra-labs/wallet-adapter-plugin=./node_modules/@cedra-labs/wallet-adapter-plugin/src/index.ts --external:crypto --outfile=public/login.js && esbuild node_modules/marked/lib/marked.esm.js --bundle --format=iife --global-name=marked --minify --outfile=public/marked.js",
     "build": "npm run build:client && tsc -p tsconfig.build.json && rm -rf dist/db && cp -r db dist/db",
     "start": "node dist/src/server.js",
     "db:migrate": "node --import tsx src/db/migrate.ts",
@@ -25,8 +25,8 @@
   "dependencies": {
     "@atproto/api": "^0.13.35",
     "@cedra-labs/ts-sdk": "^2.2.8",
-    "@fastify/cors": "^10.1.0",
     "@fastify/cookie": "^11.0.2",
+    "@fastify/cors": "^10.1.0",
     "@fastify/formbody": "^8.0.2",
     "@fastify/multipart": "^10.0.0",
     "@fastify/session": "^11.1.1",
@@ -48,7 +48,7 @@
     "@cedra-labs/wallet-adapter-core": "^5.5.5",
     "@cedra-labs/wallet-adapter-plugin": "^2.4.3",
     "@cedra-labs/wallet-standard": "^0.5.1",
-    "@inferenco/nova-wallet-adapter": "^0.1.0",
+    "@inferenco/infer-wallet-adapter": "0.2.0",
     "@types/node": "^20.19.41",
     "@types/pg": "^8.20.0",
     "@types/supertest": "^7.2.0",

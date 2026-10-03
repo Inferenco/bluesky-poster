@@ -20,6 +20,7 @@ vi.mock('../replit_integrations/object_storage.js', () => ({
 const ADMIN_ADDRESS = '0xbdf9c94e797716648980ed99a0c6e2b3d6452ce5c1d28dbad3517a9be682b724';
 
 const testConfig = {
+  corsOrigin: '*',
   auth: {
     cedraFullnodeUrl: 'http://unused.example',
     adminContractAddress: '0x1',
@@ -257,6 +258,7 @@ function repositories(): AppRepositories {
       countReferencingAsset: async (assetId) => 0,
       listPublished: async ({ limit, offset } = {}) => ({ blogs: [], total: 0 }),
       setPublishedAt: async (id, publishedAt) => {},
+      isAssetPublished: async () => false,
       reorderAssets: async (blogId, assetId, newPosition) => {}
     }
   };

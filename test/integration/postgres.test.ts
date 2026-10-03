@@ -2,6 +2,7 @@ import path from 'node:path';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { buildApp } from '../../src/app.js';
+import { BlogsRepository } from '../../src/repositories/blogs.js';
 import { createPool } from '../../src/db/client.js';
 import { migrate } from '../../src/db/migrate.js';
 import { AssetsRepository } from '../../src/repositories/assets.js';
@@ -19,6 +20,7 @@ const describeIfDb = databaseUrl ? describe : describe.skip;
 const ADMIN_ADDRESS = '0xbdf9c94e797716648980ed99a0c6e2b3d6452ce5c1d28dbad3517a9be682b724';
 
 const testConfig = {
+  corsOrigin: '*',
   auth: {
     cedraFullnodeUrl: 'http://unused.example',
     adminContractAddress: '0x1',
@@ -78,7 +80,7 @@ describeIfDb('Postgres-backed app flow', () => {
 
     const app = await buildApp({
       config: testConfig,
-      repositories: { messages, assets, settings, runs },
+      repositories: { messages, assets, settings, runs, blogs: new BlogsRepository(pool) },
       auth: {
         fetchAdmins: async () => [ADMIN_ADDRESS],
         verifySignature: () => true
