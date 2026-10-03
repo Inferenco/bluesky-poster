@@ -4,11 +4,14 @@ import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyReply }
 import formbody from '@fastify/formbody';
 import multipart from '@fastify/multipart';
 import cookie from '@fastify/cookie';
+import cors from '@fastify/cors';
 import session from '@fastify/session';
 import sharp from 'sharp';
 import type { AppConfig } from './config.js';
 import type { AssetRecord, RegisterImageBufferInput, RegisterLocalImageInput, RegisterObjectStorageImageInput } from './repositories/assets.js';
 import { normalizePlatforms, type CreateMessageInput, type MessageRecord, type MessageStatus, type PostingPlatform } from './repositories/messages.js';
+import { marked } from 'marked';
+import type { BlogRecord, BlogStatus, CreateBlogInput, BlogsRepository } from './repositories/blogs.js';
 import { countGraphemes } from './validate.js';
 import { downloadObject } from './replit_integrations/object_storage.js';
 import type { PostGenerator } from './services/postGenerator.js';
@@ -53,6 +56,22 @@ export interface AppRepositories {
   runs: {
     list(): Promise<DashboardRun[]>;
   };
+  blogs: {
+    list(): Promise<BlogRecord[]>;
+    get(id: string): Promise<BlogRecord | null>;
+    create(input: CreateBlogInput): Promise<BlogRecord>;
+    update(id: string, input: Partial<CreateBlogInput>): Promise<BlogRecord>;
+    setStatus(id: string, status: BlogStatus): Promise<void>;
+    delete(id: string): Promise<void>;
+    addAsset(blogId: string, assetId: string, position?: number): Promise<void>;
+    removeAsset(blogId: string, assetId: string): Promise<void>;
+    getBlogAssets(blogId: string): Promise<AssetRecord[]>;
+    countReferencingAsset(assetId: string): Promise<number>;
+    listPublished(options?: { limit?: number; offset?: number }): Promise<{ blogs: BlogRecord[]; total: number }>;
+    setPublishedAt(id: string, publishedAt: Date | string | null): Promise<void>;
+    reorderAssets(blogId: string, assetId: string, newPosition: number): Promise<void>;
+    isAssetPublished(assetId: string): Promise<boolean>;
+  };
 }
 
 export interface DashboardSettings {
@@ -95,7 +114,7 @@ function makeRequireAuth(fetchAdmins: AdminFetcher) {
 }
 
 export async function buildApp(options: {
-  config: Pick<AppConfig, 'auth'>;
+  config: Pick<AppConfig, 'auth' | 'corsOrigin'>;
   repositories: AppRepositories;
   postGenerator?: PostGenerator;
   auth?: {
@@ -112,6 +131,11 @@ export async function buildApp(options: {
     }
   });
   await app.register(cookie);
+  await app.register(cors, {
+    origin: options.config.corsOrigin === '*' ? true : options.config.corsOrigin,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+  });
   await app.register(session, {
     secret: process.env.SESSION_SECRET ?? 'fallback-secret-change-me-in-production!!',
     cookie: {
@@ -202,8 +226,92 @@ export async function buildApp(options: {
       return reply.code(503).send({ ok: false });
     }
   });
-  app.get('/', { preHandler: requireAuth }, async (_request, reply) => reply.redirect('/messages'));
+  
+  // Public API endpoint for published blogs
+  app.get<{ Querystring: { page?: string; limit?: string } }>('/api/blogs', async (request, reply) => {
+    const page = Math.max(1, Number(request.query.page ?? 1));
+    const limit = Math.min(100, Math.max(1, Number(request.query.limit ?? 10)));
+    const offset = (page - 1) * limit;
 
+    try {
+      const { blogs, total } = await options.repositories.blogs.listPublished({ limit, offset });
+      
+      // Get assets for each blog
+      const blogsWithAssets = await Promise.all(blogs.map(async (blog) => {
+        const assets = await options.repositories.blogs.getBlogAssets(blog.id);
+        
+        // Generate excerpt from content (first 200 characters, strip markdown)
+        const excerpt = generateExcerpt(blog.content);
+        
+        return {
+          id: blog.id,
+          title: blog.title,
+          content: blog.content,
+          excerpt,
+          published_at: blog.published_at,
+          assets: assets.map(asset => {
+            const publicUrl = '/public/assets/' + encodeURIComponent(asset.id);
+            return {
+              id: asset.id,
+              alt_text: asset.alt_text_default,
+              public_url: publicUrl,
+              path: asset.path_or_object_key
+            };
+          })
+        };
+      }));
+
+      return {
+        blogs: blogsWithAssets,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit)
+        }
+      };
+    } catch (error) {
+      request.log.error({ err: error }, 'Failed to fetch blogs');
+      return reply.code(500).send({ error: 'Failed to fetch blogs' });
+    }
+  });
+
+  // Public API endpoint for a single published blog
+  app.get<{ Params: { id: string } }>('/api/blogs/:id', async (request, reply) => {
+    try {
+      const blog = await options.repositories.blogs.get(request.params.id);
+      
+      if (!blog || blog.status !== 'published') {
+        return reply.code(404).send({ error: 'Blog not found or not published' });
+      }
+      
+      const assets = await options.repositories.blogs.getBlogAssets(blog.id);
+      
+      return {
+        id: blog.id,
+        title: blog.title,
+        content: blog.content,
+        excerpt: generateExcerpt(blog.content),
+        published_at: blog.published_at,
+        created_at: blog.created_at,
+        updated_at: blog.updated_at,
+        assets: assets.map(asset => {
+          const publicUrl = '/public/assets/' + encodeURIComponent(asset.id);
+          return {
+            id: asset.id,
+            alt_text: asset.alt_text_default,
+            public_url: publicUrl,
+            path: asset.path_or_object_key
+          };
+        })
+      };
+    } catch (error) {
+      request.log.error({ err: error }, 'Failed to fetch blog');
+      return reply.code(500).send({ error: 'Failed to fetch blog' });
+    }
+  });
+  
+  app.get('/', { preHandler: requireAuth }, async (_request, reply) => reply.redirect('/messages'));
   app.get('/messages', { preHandler: requireAuth }, async (_request, reply) => {
     const messages = await options.repositories.messages.list();
     return reply.type('text/html').send(renderPage('Messages', 'messages', renderMessages(messages)));
@@ -287,6 +395,167 @@ export async function buildApp(options: {
     return reply.redirect('/messages');
   });
 
+  // Blog routes
+  app.get('/blogs', { preHandler: requireAuth }, async (_request, reply) => {
+    const blogs = await options.repositories.blogs.list();
+    return reply.type('text/html').send(renderPage('Blogs', 'blogs', renderBlogs(blogs)));
+  });
+
+  app.get('/blogs/new', { preHandler: requireAuth }, async (_request, reply) => {
+    const assets = await options.repositories.assets.list();
+    return reply.type('text/html').send(renderPage('New blog', 'blogs', renderBlogForm('/blogs', assets, undefined, [])));
+  });
+
+  app.post('/blogs', { preHandler: requireAuth }, async (request, reply) => {
+    const body = form(request.body);
+    const blog = await options.repositories.blogs.create({
+      title: String(body.title ?? ''),
+      content: String(body.content ?? ''),
+      status: blogStatusFrom(body.status, 'draft')
+    });
+    
+    // Handle selected assets (now sent as JSON string)
+    const selectedAssetsRaw = body.selectedAssets;
+    let assetIds: string[] = [];
+    
+    if (selectedAssetsRaw) {
+      try {
+        // Try to parse as JSON first (new format with single hidden input)
+        if (typeof selectedAssetsRaw === 'string') {
+          const parsed = JSON.parse(selectedAssetsRaw);
+          if (Array.isArray(parsed)) {
+            assetIds = parsed.map(String).filter(id => id && id.trim());
+          }
+        }
+        // Fallback to old formats for compatibility
+        else if (Array.isArray(selectedAssetsRaw)) {
+          assetIds = selectedAssetsRaw.map(String).filter(id => id && id.trim());
+        }
+        else if (typeof selectedAssetsRaw === 'object') {
+          assetIds = Object.values(selectedAssetsRaw).map(String).filter(id => id && id.trim());
+        }
+      } catch (e) {
+        // If JSON parsing fails, treat as single string
+        if (typeof selectedAssetsRaw === 'string' && selectedAssetsRaw.trim()) {
+          assetIds = [selectedAssetsRaw.trim()];
+        }
+      }
+    }
+    
+    for (let i = 0; i < assetIds.length; i++) {
+      const assetId = assetIds[i];
+      // Verify asset exists before adding to avoid foreign key constraint
+      const asset = await options.repositories.assets.get(assetId);
+      if (asset) {
+        await options.repositories.blogs.addAsset(blog.id, assetId, i);
+      }
+    }
+    
+    return reply.redirect('/blogs');
+  });
+
+  app.get<{ Params: { id: string } }>('/blogs/:id/edit', { preHandler: requireAuth }, async (request, reply) => {
+    const blog = await options.repositories.blogs.get(request.params.id);
+    if (!blog) return reply.code(404).send('Blog not found');
+    const [assets, blogAssets, assetRefCounts] = await Promise.all([
+      options.repositories.assets.list(),
+      options.repositories.blogs.getBlogAssets(request.params.id),
+      Promise.all((await options.repositories.blogs.getBlogAssets(request.params.id)).map(asset => 
+        options.repositories.blogs.countReferencingAsset(asset.id)
+      ))
+    ]);
+    const otherRefCounts = assetRefCounts.map(count => Math.max(0, count - 1));
+    const blogWithAssets = { ...blog, assets: blogAssets };
+    return reply.type('text/html').send(renderPage('Edit blog', 'blogs', renderBlogForm(`/blogs/${blog.id}`, assets, blogWithAssets, otherRefCounts)));
+  });
+
+  app.post<{ Params: { id: string } }>('/blogs/:id', { preHandler: requireAuth }, async (request, reply) => {
+    const body = form(request.body);
+    
+    const input: Partial<CreateBlogInput> = {
+      title: String(body.title ?? ''),
+      content: String(body.content ?? ''),
+      status: blogStatusFrom(body.status, 'draft')
+    };
+    await options.repositories.blogs.update(request.params.id, input);
+    
+    // Handle selected assets - sync the current selection with the database (now sent as JSON string)
+    const selectedAssetsRaw = body.selectedAssets;
+    let selectedAssetIds: string[] = [];
+    
+    if (selectedAssetsRaw) {
+      try {
+        // Try to parse as JSON first (new format with single hidden input)
+        if (typeof selectedAssetsRaw === 'string') {
+          const parsed = JSON.parse(selectedAssetsRaw);
+          if (Array.isArray(parsed)) {
+            selectedAssetIds = parsed.map(String).filter(id => id && id.trim());
+          }
+        }
+        // Fallback to old formats for compatibility
+        else if (Array.isArray(selectedAssetsRaw)) {
+          selectedAssetIds = selectedAssetsRaw.map(String).filter(id => id && id.trim());
+        }
+        else if (typeof selectedAssetsRaw === 'object') {
+          selectedAssetIds = Object.values(selectedAssetsRaw).map(String).filter(id => id && id.trim());
+        }
+      } catch (e) {
+        // If JSON parsing fails, treat as single string
+        if (typeof selectedAssetsRaw === 'string' && selectedAssetsRaw.trim()) {
+          selectedAssetIds = [selectedAssetsRaw.trim()];
+        }
+      }
+    }
+    
+    // Get current assets for this blog
+    const currentAssets = await options.repositories.blogs.getBlogAssets(request.params.id);
+    const currentAssetIds = currentAssets.map(a => a.id);
+    
+    // Determine which assets to remove (in current but not in selected)
+    const assetsToRemove = currentAssetIds.filter(id => !selectedAssetIds.includes(id));
+    for (const assetId of assetsToRemove) {
+      await options.repositories.blogs.removeAsset(request.params.id, assetId);
+    }
+    
+    // Determine which assets to add (in selected but not in current)
+    const assetsToAdd = selectedAssetIds.filter(id => !currentAssetIds.includes(id));
+    for (let i = 0; i < assetsToAdd.length; i++) {
+      const assetId = assetsToAdd[i];
+      // Verify asset exists before adding to avoid foreign key constraint
+      const asset = await options.repositories.assets.get(assetId);
+      if (asset) {
+        const currentCount = currentAssetIds.length + i;
+        await options.repositories.blogs.addAsset(request.params.id, assetId, currentCount);
+      }
+    }
+    
+    return reply.redirect('/blogs');
+  });
+
+  app.post<{ Params: { id: string } }>('/blogs/:id/status', { preHandler: requireAuth }, async (request, reply) => {
+    const body = form(request.body);
+    await options.repositories.blogs.setStatus(request.params.id, blogStatusFrom(body.status, 'draft'));
+    return reply.redirect('/blogs');
+  });
+
+  app.post<{ Params: { id: string } }>('/blogs/:id/delete', { preHandler: requireAuth }, async (request, reply) => {
+    await options.repositories.blogs.delete(request.params.id);
+    return reply.redirect('/blogs');
+  });
+
+  app.post<{ Params: { id: string } }>('/blogs/:id/assets', { preHandler: requireAuth }, async (request, reply) => {
+    const body = form(request.body);
+    const assetId = String(body.assetId ?? '');
+    const position = Number(body.position ?? 0);
+    await options.repositories.blogs.addAsset(request.params.id, assetId, position);
+    return reply.redirect(`/blogs/${request.params.id}/edit`);
+  });
+
+  app.post<{ Params: { id: string; assetId: string } }>('/blogs/:id/assets/:assetId/delete', { preHandler: requireAuth }, async (request, reply) => {
+    await options.repositories.blogs.removeAsset(request.params.id, request.params.assetId);
+    return reply.redirect(`/blogs/${request.params.id}/edit`);
+  });
+
   app.get('/settings', { preHandler: requireAuth }, async (_request, reply) => {
     const settings = await options.repositories.settings.getDashboardSettings();
     return reply.type('text/html').send(renderPage('Settings', 'settings', renderSettings(settings)));
@@ -339,6 +608,30 @@ export async function buildApp(options: {
     }
   });
 
+  // Public asset endpoint for serving assets to the frontend
+  app.get<{ Params: { id: string } }>('/public/assets/:id', async (request, reply) => {
+    if (!await options.repositories.blogs.isAssetPublished(request.params.id)) {
+      return reply.code(404).send('Asset not found');
+    }
+    const asset = await options.repositories.assets.get(request.params.id);
+    if (!asset) return reply.code(404).send('Asset not found');
+
+    try {
+      const buffer = await readAssetPreview(asset);
+      if (!buffer) return reply.code(404).send('Asset not available');
+      return reply
+        .header('cache-control', 'no-store')
+        .header('access-control-allow-origin', '*')
+        .header('access-control-allow-methods', 'GET')
+        .header('access-control-allow-headers', 'Content-Type')
+        .type(asset.mime_type)
+        .send(buffer);
+    } catch (err) {
+      request.log.warn({ err, assetId: asset.id }, 'Public asset serving failed');
+      return reply.code(404).send('Asset not available');
+    }
+  });
+
   app.post('/assets', { preHandler: requireAuth }, async (request, reply) => {
     const body = form(request.body);
     await options.repositories.assets.registerLocalImage({
@@ -356,6 +649,13 @@ export async function buildApp(options: {
         `Cannot delete: ${refCount} message${refCount === 1 ? ' is' : 's are'} still using this asset.`
       );
       return reply.redirect(`/assets?error=${msg}`);
+    }
+    const blogRefCount = await options.repositories.blogs.countReferencingAsset(assetId);
+    if (blogRefCount > 0) {
+      const msg = encodeURIComponent(
+        'Cannot delete: ' + blogRefCount + ' blog(s) still use this asset.'
+      );
+      return reply.redirect('/assets?error=' + msg);
     }
     await options.repositories.assets.delete(assetId);
     return reply.redirect('/assets');
@@ -436,6 +736,14 @@ function statusFrom(value: unknown, fallback: MessageStatus): MessageStatus {
   const raw = String(value ?? fallback);
   if (['draft', 'approved', 'paused', 'archived'].includes(raw)) {
     return raw as MessageStatus;
+  }
+  return fallback;
+}
+
+function blogStatusFrom(value: unknown, fallback: BlogStatus): BlogStatus {
+  const raw = String(value ?? fallback);
+  if (['draft', 'published', 'archived'].includes(raw)) {
+    return raw as BlogStatus;
   }
   return fallback;
 }
@@ -537,13 +845,14 @@ async function downloadPublicStorageUrl(publicUrl: string): Promise<Buffer | nul
   return Buffer.from(await response.arrayBuffer());
 }
 
-type NavSection = 'messages' | 'assets' | 'settings' | 'runs';
+type NavSection = 'messages' | 'assets' | 'settings' | 'runs' | 'blogs';
 
 type IconName =
   | 'messages'
   | 'assets'
   | 'settings'
   | 'runs'
+  | 'blogs'
   | 'logout'
   | 'plus'
   | 'edit'
@@ -634,10 +943,10 @@ function renderPage(title: string, active: NavSection, body: string): string {
     .app-title { margin: 0; color: var(--text); font-size: 22px; line-height: 1.1; }
     .env-chip { display: inline-flex; align-items: center; min-height: 34px; border: 1px solid rgba(68, 103, 154, .42); border-radius: 8px; padding: 0 12px; color: var(--muted); background: rgba(7, 8, 18, .56); font-size: 13px; }
     .content-panel { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); box-shadow: var(--shadow); backdrop-filter: blur(20px); overflow: hidden; }
-    .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 26px 26px 18px; border-bottom: 1px solid rgba(68, 103, 154, .24); }
+    .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 26px 26px 18px; border-bottom: 1px solid rgba(68, 103, 154, .24); margin-bottom: 20px; }
     .page-head h2 { margin: 0; color: var(--text); font-size: 30px; line-height: 1.1; }
-    .page-head p { margin: 8px 0 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
-    .section-body { padding: 0 24px 24px; }
+    .page-head p { margin: 8px 0 12px; color: var(--muted); font-size: 14px; line-height: 1.55; }
+    .section-body { padding: 8px 24px 24px; }
     .button, button, .action-button { appearance: none; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; border: 1px solid var(--border); border-radius: 8px; padding: 0 13px; background: rgba(8, 12, 24, .72); color: var(--text); font: inherit; font-size: 13px; font-weight: 700; line-height: 1; text-decoration: none; cursor: pointer; transition: border-color .15s ease, background .15s ease, color .15s ease, transform .15s ease; }
     .button:hover, button:hover, .action-button:hover { border-color: rgba(18, 215, 255, .58); background: rgba(18, 215, 255, .10); text-decoration: none; }
     .button.primary, button.primary { border-color: rgba(20, 120, 255, .9); background: linear-gradient(135deg, var(--cyan), var(--blue)); color: #ffffff; box-shadow: 0 12px 32px rgba(20, 120, 255, .30); }
@@ -657,7 +966,7 @@ function renderPage(title: string, active: NavSection, body: string): string {
     .actions form { display: inline-flex; }
     .badge { display: inline-flex; align-items: center; gap: 7px; min-height: 26px; border: 1px solid rgba(168, 180, 200, .28); border-radius: 999px; padding: 0 10px; color: var(--muted); background: rgba(168, 180, 200, .07); font-size: 12px; font-weight: 800; }
     .badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 14px currentColor; }
-    .badge.approved, .badge.posted, .badge.success { border-color: rgba(38, 224, 143, .42); color: var(--success); background: rgba(38, 224, 143, .09); }
+    .badge.approved, .badge.posted, .badge.success, .badge.published { border-color: rgba(38, 224, 143, .42); color: var(--success); background: rgba(38, 224, 143, .09); }
     .badge.paused, .badge.skipped, .badge.dry_run { border-color: rgba(255, 194, 71, .44); color: var(--warning); background: rgba(255, 194, 71, .09); }
     .badge.draft { border-color: rgba(20, 120, 255, .52); color: #4f9dff; background: rgba(20, 120, 255, .11); }
     .badge.archived, .badge.failed, .badge.error { border-color: rgba(255, 77, 94, .44); color: var(--danger); background: rgba(255, 77, 94, .09); }
@@ -666,8 +975,8 @@ function renderPage(title: string, active: NavSection, body: string): string {
     .form-panel { max-width: 860px; border: 1px solid rgba(68, 103, 154, .24); border-radius: 8px; background: rgba(7, 8, 18, .34); padding: 22px; }
     .form-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 16px; }
     .form-tools .upload-status { margin-right: 0; }
-    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-    label { display: grid; gap: 8px; color: var(--muted); font-size: 13px; font-weight: 700; }
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+    label { display: grid; gap: 12px; color: var(--muted); font-size: 13px; font-weight: 700; }
     small { color: var(--muted-2); font-size: 12px; line-height: 1.45; }
     input, select, textarea { width: 100%; border: 1px solid rgba(68, 103, 154, .42); border-radius: 8px; background: rgba(7, 8, 18, .76); color: var(--text); padding: 10px 11px; font: inherit; font-size: 14px; outline: none; }
     input:focus, select:focus, textarea:focus { border-color: rgba(18, 215, 255, .74); box-shadow: 0 0 0 3px rgba(18, 215, 255, .12); }
@@ -722,6 +1031,7 @@ function renderPage(title: string, active: NavSection, body: string): string {
       <a class="brand" href="/messages" aria-label="Inferenco Poster home">${brandMark()}<strong>Inferenco<br><span>Poster</span></strong></a>
       <nav class="nav-list" aria-label="Dashboard">
         ${renderNavLink('messages', '/messages', 'Messages', 'messages', active)}
+        ${renderNavLink('blogs', '/blogs', 'Blogs', 'blogs', active)}
         ${renderNavLink('assets', '/assets', 'Assets', 'assets', active)}
         ${renderNavLink('settings', '/settings', 'Settings', 'settings', active)}
         ${renderNavLink('runs', '/runs', 'Runs', 'runs', active)}
@@ -942,6 +1252,306 @@ function renderRuns(runs: DashboardRun[]): string {
   </section>`;
 }
 
+function renderBlogs(blogs: BlogRecord[]): string {
+  const rows = blogs.map((blog) => `<tr>
+    <td class="message-cell">${escapeHtml(blog.title)}</td>
+    <td>${renderBlogBadge(blog.status)}</td>
+    <td class="numeric">${formatBlogDate(blog.published_at)}</td>
+    <td class="numeric">${formatBlogDate(blog.created_at)}</td>
+    <td class="numeric">${formatBlogDate(blog.updated_at)}</td>
+    <td class="actions">
+      <a class="action-button" href="/blogs/${escapeHtml(blog.id)}/edit">${icon('edit')}<span>Edit</span></a>
+      <form method="post" action="/blogs/${escapeHtml(blog.id)}/status"><input type="hidden" name="status" value="draft"><button class="action-button" onclick="return confirm('Set this blog to draft?')">${icon('pause')}<span>Draft</span></button></form>
+      <form method="post" action="/blogs/${escapeHtml(blog.id)}/status"><input type="hidden" name="status" value="published"><button class="action-button">${icon('check')}<span>Publish</span></button></form>
+      <form method="post" action="/blogs/${escapeHtml(blog.id)}/status"><input type="hidden" name="status" value="archived"><button class="action-button" onclick="return confirm('Archive this blog?')">${icon('archive')}<span>Archive</span></button></form>
+      <form method="post" action="/blogs/${escapeHtml(blog.id)}/delete"><button class="action-button danger" onclick="return confirm('Permanently delete this blog? This cannot be undone.')">${icon('trash')}<span>Delete</span></button></form>
+    </td>
+  </tr>`).join('');
+
+  return `<section class="content-panel">
+    <div class="page-head"><div><h2>Blogs</h2><p>Create, manage, and publish blog posts with markdown support.</p></div><a class="button primary" href="/blogs/new">${icon('plus')}<span>New blog</span></a></div>
+    <div class="section-body">${rows ? `<div class="table-wrap"><table><thead><tr><th>Title</th><th>Status</th><th>Published</th><th>Created</th><th>Updated</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No blogs yet.</div>'}</div>
+  </section>`;
+}
+
+function renderBlogBadge(status: BlogStatus): string {
+  const className = status.toLowerCase();
+  const labels: Record<BlogStatus, string> = {
+    draft: 'Draft',
+    published: 'Published',
+    archived: 'Archived'
+  };
+  return `<span class="badge ${className}">${labels[status] || status}</span>`;
+}
+
+function formatBlogDate(value: Date | string | null): string {
+  if (!value) return '-';
+  if (value instanceof Date) {
+    return value.toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'short', 
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  }
+  return new Date(value).toLocaleDateString('en-US', { 
+    year: 'numeric', 
+    month: 'short', 
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function blogPreviewDocument(html: string): string {
+  return '<!doctype html><meta charset="utf-8"><style>' +
+    'body{font:14px/1.6 system-ui,sans-serif;background:#070812;color:#f7fbff;padding:16px;margin:0}' +
+    'img{max-width:100%;height:auto}a{color:#12d7ff}pre{overflow:auto;background:#111827;padding:12px}' +
+    'blockquote{border-left:3px solid #12d7ff;margin-left:0;padding-left:12px}' +
+    '</style>' + html;
+}
+
+function renderBlogForm(action: string, assets: AssetRecord[], blog?: BlogRecord & { assets?: AssetRecord[] }, assetOtherRefCounts?: number[]): string {
+  const assetOptions = [
+    `<option value="">No image asset</option>`,
+    ...assets.map((asset) => `<option value="${escapeHtml(asset.id)}"${blog?.assets?.some(a => a.id === asset.id) ? ' selected' : ''}>${escapeHtml(asset.alt_text_default)} (${escapeHtml(asset.path_or_object_key ?? storageKindLabel(asset.storage_kind))})</option>`)
+  ].join('');
+
+  // For existing blog, get the selected assets
+  const selectedAssetIds = blog?.assets?.map(a => a.id) || [];
+
+  return `<section class="content-panel">
+    <div class="page-head"><div><h2>${blog ? 'Edit' : 'New'} blog</h2><p>Create and manage blog posts with markdown content. Published blogs will be visible on the public website.</p></div></div>
+    <div class="section-body">
+      <form class="form-panel" method="post" action="${escapeHtml(action)}">
+        <div class="form-grid">
+          <label class="full">Title <input name="title" id="blogTitle" value="${escapeHtml(blog?.title ?? '')}" placeholder="Blog post title"></label>
+          <label>Status <select name="status">
+            ${['draft', 'published', 'archived'].map((status) => `<option value="${status}"${blog?.status === status ? ' selected' : ''}>${status}</option>`).join('')}
+          </select></label>
+          <label class="full">Content (Markdown) 
+            <textarea name="content" id="blogContent" rows="15" placeholder="Write your blog content in markdown...">${escapeHtml(blog?.content ?? '')}</textarea>
+            <small>Supports markdown formatting, images, links, etc.</small>
+          </label>
+          
+          <label class="full">Assets (Images)
+            <select name="assetId" id="blogAssetSelect">
+              ${assetOptions}
+            </select>
+            <button type="button" class="button" onclick="addAssetToBlog()">${icon('plus')}<span>Add Asset</span></button>
+            <input type="hidden" id="selectedAssetsInput" name="selectedAssets" value="${escapeHtml(JSON.stringify(selectedAssetIds))}">
+            <div id="selectedAssets" class="asset-list">
+              ${selectedAssetIds.length > 0 ? selectedAssetIds.map((assetId, index) => {
+                const asset = assets.find(a => a.id === assetId);
+                if (!asset) return '';
+                const refCount = assetOtherRefCounts?.[index] ?? 0;
+                const refNote = refCount > 0 ? ` <span class="muted">(Used by ${refCount} other ${refCount === 1 ? 'blog' : 'blogs'})</span>` : '';
+                return `<div class="selected-asset" data-asset-id="${escapeHtml(asset.id)}">
+                  <span>${escapeHtml(asset.alt_text_default)}</span>
+                  ${refNote}
+                  <button type="button" class="button danger" onclick="removeAssetFromBlog(this)">${icon('trash')}<span>Remove</span></button>
+                </div>`;
+              }).join('') : '<div class="muted" data-empty-assets>No assets selected</div>'}
+            </div>
+          </label>
+        </div>
+        
+        <!-- Markdown Preview -->
+        <div class="form-grid">
+          <label class="full">Preview
+            <iframe id="markdownPreview" class="markdown-preview" title="Markdown preview" sandbox="" referrerpolicy="no-referrer" srcdoc="${escapeHtml(blog?.content ? blogPreviewDocument(String(marked.parse(blog.content))) : 'Preview will appear here...')}"></iframe>
+          </label>
+        </div>
+        
+        <div class="form-actions"><a class="button" href="/blogs">Cancel</a><button class="button primary">${icon('save')}<span>Save</span></button></div>
+      </form>
+    </div>
+  </section>
+  <script src="/public/marked.js"></script>
+  <script>
+  // Asset data for client-side use
+  const allAssets = ${JSON.stringify(assets.map(a => ({ id: a.id, alt_text_default: a.alt_text_default }))).replace(/</g, '\\u003c')};
+
+  // Asset management functions (must be global for onclick handlers)
+  function addAssetToBlog() {
+    const select = document.getElementById('blogAssetSelect');
+    const assetId = select?.value;
+    if (!assetId) return;
+    
+    // Check if already added
+    const existing = document.querySelector('[data-asset-id="' + assetId + '"]');
+    if (existing) {
+      alert('This asset is already added');
+      return;
+    }
+    
+    // Add to selected assets display
+    const selectedAssets = document.getElementById('selectedAssets');
+    const asset = allAssets.find(function(a) { return a.id === assetId; });
+    if (!asset) return;
+    
+    const assetDiv = document.createElement('div');
+    assetDiv.className = 'selected-asset';
+    assetDiv.dataset.assetId = asset.id;
+    const label = document.createElement('span');
+    label.textContent = asset.alt_text_default;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'button danger';
+    remove.textContent = 'Remove';
+    remove.addEventListener('click', () => removeAssetFromBlog(remove));
+    assetDiv.append(label, remove);
+    selectedAssets.appendChild(assetDiv);
+    
+    // Update the hidden input with all selected asset IDs
+    updateSelectedAssetsInput();
+    
+    // Reset select
+    select.value = '';
+  } 
+  
+  function removeAssetFromBlog(button) {
+    const assetDiv = button.closest('.selected-asset');
+    if (assetDiv) {
+      assetDiv.remove();
+      // Update the hidden input after removal
+      updateSelectedAssetsInput();
+    }
+  }
+
+  function updateSelectedAssetsInput() {
+    const input = document.getElementById('selectedAssetsInput');
+    const selectedAssetsDiv = document.getElementById('selectedAssets');
+    if (input && selectedAssetsDiv) {
+      // Get all selected asset IDs from the div elements
+      const assetDivs = selectedAssetsDiv.querySelectorAll('.selected-asset[data-asset-id]');
+      const assetIds = Array.from(assetDivs).map(div => div.dataset.assetId);
+      input.value = JSON.stringify(assetIds);
+      const empty = selectedAssetsDiv.querySelector('[data-empty-assets]');
+      if (assetIds.length > 0) {
+        empty?.remove();
+      } else if (!empty) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'muted';
+        placeholder.dataset.emptyAssets = '';
+        placeholder.textContent = 'No assets selected';
+        selectedAssetsDiv.appendChild(placeholder);
+      }
+    }
+  }
+
+  const previewStyles = ${JSON.stringify(blogPreviewDocument(''))};
+
+  // Live markdown preview
+  document.addEventListener('DOMContentLoaded', function() {
+    const preview = document.getElementById('markdownPreview');
+    const content = document.getElementById('blogContent');
+    let previewTimeout;
+    
+    function updatePreview() {
+    if (!preview || !content) return;
+    const markdown = content.value;
+    if (!markdown.trim()) {
+      preview.srcdoc = 'Preview will appear here...';
+      return;
+    }
+    
+    // Use marked library for preview
+    try {
+      if (typeof marked !== 'undefined') {
+        preview.srcdoc = previewStyles + (marked.parse ? marked.parse(markdown) : marked(markdown));
+      } else {
+        preview.srcdoc = 'Markdown preview is unavailable.';
+      }
+    } catch (e) {
+      preview.srcdoc = 'Markdown preview is unavailable.';
+    }
+  }
+  
+  content?.addEventListener('input', () => {
+    clearTimeout(previewTimeout);
+    previewTimeout = setTimeout(updatePreview, 300); // Debounce
+  });
+
+  // Update preview on load
+  updatePreview();
+
+});
+  </script>
+  <style>
+    .markdown-preview {
+      width: 100%;
+      min-height: 260px;
+      border: 1px solid rgba(68, 103, 154, 0.42);
+      border-radius: 8px;
+      background: rgba(7, 8, 18, 0.76);
+      padding: 16px;
+      max-height: 400px;
+      overflow-y: auto;
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    .markdown-preview p {
+      margin: 8px 0;
+    }
+    .markdown-preview h1, .markdown-preview h2, .markdown-preview h3 {
+      margin: 16px 0 8px;
+      color: var(--text);
+    }
+    .markdown-preview h1 { font-size: 24px; }
+    .markdown-preview h2 { font-size: 20px; }
+    .markdown-preview h3 { font-size: 18px; }
+    .markdown-preview a {
+      color: var(--cyan);
+    }
+    .markdown-preview img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 4px;
+      margin: 8px 0;
+    }
+    .markdown-preview pre {
+      background: rgba(14, 17, 29, 0.84);
+      padding: 12px;
+      border-radius: 4px;
+      overflow-x: auto;
+      margin: 8px 0;
+    }
+    .markdown-preview code {
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 13px;
+    }
+    .markdown-preview blockquote {
+      border-left: 3px solid var(--cyan);
+      padding-left: 12px;
+      margin-left: 0;
+      color: var(--muted);
+    }
+    .asset-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .selected-asset {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: rgba(7, 8, 18, 0.76);
+      border: 1px solid rgba(68, 103, 154, 0.42);
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    .selected-asset .button {
+      padding: 4px 8px;
+      min-height: 28px;
+    }
+  </style>`;
+}
+
 function brandStyles(): string {
   return `
     :root {
@@ -1036,6 +1646,7 @@ function icon(name: IconName): string {
     assets: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="m7 16 3.4-3.5 2.3 2.4 2.1-2.1L18 16"/><circle cx="8.5" cy="8.5" r="1.1"/>',
     settings: '<path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="M19 13.4v-2.8l-2-.6a5.7 5.7 0 0 0-.7-1.6l1-1.8-2-2-1.8 1a5.7 5.7 0 0 0-1.6-.7L11.4 3H8.6L8 5a5.7 5.7 0 0 0-1.6.7l-1.8-1-2 2 1 1.8a5.7 5.7 0 0 0-.7 1.6l-2 .6v2.8l2 .6c.2.6.4 1.1.7 1.6l-1 1.8 2 2 1.8-1c.5.3 1 .5 1.6.7l.6 2h2.8l.6-2c.6-.2 1.1-.4 1.6-.7l1.8 1 2-2-1-1.8c.3-.5.5-1 .7-1.6l1.9-.7Z"/>',
     runs: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+    blogs: '<path d="M4 19.5v-14H8.5L4 5.5H20v14H4z"/><path d="M8 9h8M8 12h5"/>',
     logout: '<path d="M9 6H5.5A1.5 1.5 0 0 0 4 7.5v9A1.5 1.5 0 0 0 5.5 18H9"/><path d="M13 8l4 4-4 4M17 12H8"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
     edit: '<path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3Z"/><path d="m14 8 2 2"/>',
@@ -1061,4 +1672,20 @@ function escapeHtml(value: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+}
+
+function generateExcerpt(content: string, maxLength: number = 200): string {
+  // Strip markdown and HTML tags
+  const plainText = content
+    .replace(/<[^>]*>/g, '') // Remove HTML tags
+    .replace(/[#*_~`\[\]()\-+=\|{}]/g, '') // Remove markdown formatting
+    .replace(/\n\n+/g, ' ') // Replace multiple newlines with space
+    .replace(/\n/g, ' ') // Replace single newlines with space
+    .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+    .trim();
+  
+  // Take first maxLength characters and add ellipsis
+  return plainText.length > maxLength 
+    ? plainText.substring(0, maxLength) + '...' 
+    : plainText;
 }

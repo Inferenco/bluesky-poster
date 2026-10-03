@@ -4,3 +4,5 @@
 .env
 .DS_Store
 PLAN.md
+.playwright-mcp
+/public/marked.js
