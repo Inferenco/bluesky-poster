@@ -6,6 +6,7 @@ export interface Queryable {
 }
 
 export type MessageStatus = 'draft' | 'approved' | 'paused' | 'archived';
+export type MessageListView = 'current' | 'archived' | 'all';
 export type PostingPlatform = 'bluesky' | 'mastodon';
 
 export interface MessageRecord {
@@ -95,7 +96,7 @@ export class MessagesRepository {
     return result.rows[0];
   }
 
-  async list(): Promise<MessageRecord[]> {
+  async list(view: MessageListView = 'current'): Promise<MessageRecord[]> {
     const result = await this.db.query<MessageRecord>(
       `select
         m.*,
@@ -115,9 +116,11 @@ export class MessagesRepository {
         end as image_object_key
       from messages m
       left join assets a on a.id = m.image_asset_id
-      where m.status <> $1
+      where ($1 = 'all'
+        or ($1 = 'archived' and m.status = 'archived')
+        or ($1 = 'current' and m.status <> 'archived'))
       order by m.updated_at desc`,
-      ['archived']
+      [view]
     );
     return result.rows;
   }

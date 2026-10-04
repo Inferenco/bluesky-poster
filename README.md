@@ -35,6 +35,8 @@ npm run dev
 
 Open the dashboard at `http://localhost:3000/messages` and sign in by connecting Infer Wallet through Infer Connect. Only wallets that are admins of the on-chain treasury contract are authorised. For plain-http local development set `COOKIE_SECURE=false`.
 
+On `/messages`, use **Current**, **Archived**, or **All messages** to browse saved posts. Archived messages can be edited or permanently deleted from the Archived view. Delete or detach every referencing message or blog before deleting an image from Assets.
+
 Use `/assets` to register reusable images. For Replit-friendly durability, upload images through the dashboard so the image bytes and default alt text are stored in Postgres. Repo-path assets are also supported for bundled images such as files under `assets/images/originals/`.
 
 Wallet sign-in uses the pinned `@inferenco/infer-wallet-adapter@0.2.0`. The adapter owns desktop/mobile transport and signature recovery; the dashboard keeps only the pending challenge and account association for the current tab. Use HTTPS in hosted environments or localhost for local development. If a mobile return opens another tab, finish in the original tab or explicitly start a new sign-in.
