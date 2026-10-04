@@ -9,7 +9,7 @@ import session from '@fastify/session';
 import sharp from 'sharp';
 import type { AppConfig } from './config.js';
 import type { AssetRecord, RegisterImageBufferInput, RegisterLocalImageInput, RegisterObjectStorageImageInput } from './repositories/assets.js';
-import { normalizePlatforms, type CreateMessageInput, type MessageRecord, type MessageStatus, type PostingPlatform } from './repositories/messages.js';
+import { normalizePlatforms, type CreateMessageInput, type MessageRecord, type MessageListView, type MessageStatus, type PostingPlatform } from './repositories/messages.js';
 import { marked } from 'marked';
 import type { BlogRecord, BlogStatus, CreateBlogInput, BlogsRepository } from './repositories/blogs.js';
 import { countGraphemes } from './validate.js';
@@ -33,7 +33,7 @@ const ASSET_LIBRARY_LIMIT = 25;
 
 export interface AppRepositories {
   messages: {
-    list(): Promise<MessageRecord[]>;
+    list(view?: MessageListView): Promise<MessageRecord[]>;
     get(id: string): Promise<MessageRecord | null>;
     create(input: CreateMessageInput): Promise<MessageRecord>;
     update(id: string, input: Partial<CreateMessageInput>): Promise<MessageRecord>;
@@ -312,9 +312,10 @@ export async function buildApp(options: {
   });
   
   app.get('/', { preHandler: requireAuth }, async (_request, reply) => reply.redirect('/messages'));
-  app.get('/messages', { preHandler: requireAuth }, async (_request, reply) => {
-    const messages = await options.repositories.messages.list();
-    return reply.type('text/html').send(renderPage('Messages', 'messages', renderMessages(messages)));
+  app.get<{ Querystring: { view?: string } }>('/messages', { preHandler: requireAuth }, async (request, reply) => {
+    const view = messageViewFrom(request.query.view);
+    const messages = await options.repositories.messages.list(view);
+    return reply.type('text/html').send(renderPage('Messages', 'messages', renderMessages(messages, view)));
   });
 
   app.get('/messages/new', { preHandler: requireAuth }, async (_request, reply) => {
@@ -352,7 +353,7 @@ export async function buildApp(options: {
     return reply.redirect('/messages');
   });
 
-  app.get<{ Params: { id: string } }>('/messages/:id/edit', { preHandler: requireAuth }, async (request, reply) => {
+  app.get<{ Params: { id: string }; Querystring: { view?: string } }>('/messages/:id/edit', { preHandler: requireAuth }, async (request, reply) => {
     const message = await options.repositories.messages.get(request.params.id);
     if (!message) return reply.code(404).send('Message not found');
     const [assets, assetRefCount] = await Promise.all([
@@ -362,7 +363,8 @@ export async function buildApp(options: {
         : Promise.resolve(0),
     ]);
     const otherRefCount = Math.max(0, assetRefCount - 1);
-    return reply.type('text/html').send(renderPage('Edit message', 'messages', renderMessageForm(`/messages/${message.id}`, assets, message, otherRefCount)));
+    const view = messageViewFrom(request.query.view ?? (message.status === 'archived' ? 'archived' : 'current'));
+    return reply.type('text/html').send(renderPage('Edit message', 'messages', renderMessageForm(`/messages/${message.id}`, assets, message, otherRefCount, view)));
   });
 
   app.post<{ Params: { id: string } }>('/messages/:id', { preHandler: requireAuth }, async (request, reply) => {
@@ -381,18 +383,18 @@ export async function buildApp(options: {
       input.imagePath = optionalString(body.imagePath);
     }
     await options.repositories.messages.update(request.params.id, input);
-    return reply.redirect('/messages');
+    return reply.redirect(messageListUrl(messageViewFrom(body.view)));
   });
 
   app.post<{ Params: { id: string } }>('/messages/:id/status', { preHandler: requireAuth }, async (request, reply) => {
     const body = form(request.body);
     await options.repositories.messages.setStatus(request.params.id, statusFrom(body.status, 'paused'));
-    return reply.redirect('/messages');
+    return reply.redirect(messageListUrl(messageViewFrom(body.view)));
   });
 
   app.post<{ Params: { id: string } }>('/messages/:id/delete', { preHandler: requireAuth }, async (request, reply) => {
     await options.repositories.messages.delete(request.params.id);
-    return reply.redirect('/messages');
+    return reply.redirect(messageListUrl(messageViewFrom(form(request.body).view)));
   });
 
   // Blog routes
@@ -646,7 +648,7 @@ export async function buildApp(options: {
     const refCount = await options.repositories.messages.countReferencingAsset(assetId);
     if (refCount > 0) {
       const msg = encodeURIComponent(
-        `Cannot delete: ${refCount} message${refCount === 1 ? ' is' : 's are'} still using this asset.`
+        `Cannot delete: ${refCount} message${refCount === 1 ? ' is' : 's are'} still using this asset. Check the Current and Archived views in Messages to remove those references.`
       );
       return reply.redirect(`/assets?error=${msg}`);
     }
@@ -730,6 +732,14 @@ export async function buildApp(options: {
 
 function form(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? value as Record<string, unknown> : {};
+}
+
+function messageViewFrom(value: unknown): MessageListView {
+  return value === 'archived' || value === 'all' ? value : 'current';
+}
+
+function messageListUrl(view: MessageListView): string {
+  return view === 'current' ? '/messages' : '/messages?view=' + view;
 }
 
 function statusFrom(value: unknown, fallback: MessageStatus): MessageStatus {
@@ -947,6 +957,7 @@ function renderPage(title: string, active: NavSection, body: string): string {
     .page-head h2 { margin: 0; color: var(--text); font-size: 30px; line-height: 1.1; }
     .page-head p { margin: 8px 0 12px; color: var(--muted); font-size: 14px; line-height: 1.55; }
     .section-body { padding: 8px 24px 24px; }
+    .message-views { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
     .button, button, .action-button { appearance: none; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; border: 1px solid var(--border); border-radius: 8px; padding: 0 13px; background: rgba(8, 12, 24, .72); color: var(--text); font: inherit; font-size: 13px; font-weight: 700; line-height: 1; text-decoration: none; cursor: pointer; transition: border-color .15s ease, background .15s ease, color .15s ease, transform .15s ease; }
     .button:hover, button:hover, .action-button:hover { border-color: rgba(18, 215, 255, .58); background: rgba(18, 215, 255, .10); text-decoration: none; }
     .button.primary, button.primary { border-color: rgba(20, 120, 255, .9); background: linear-gradient(135deg, var(--cyan), var(--blue)); color: #ffffff; box-shadow: 0 12px 32px rgba(20, 120, 255, .30); }
@@ -1052,7 +1063,16 @@ function renderPage(title: string, active: NavSection, body: string): string {
 </html>`;
 }
 
-function renderMessages(messages: MessageRecord[]): string {
+function renderMessages(messages: MessageRecord[], view: MessageListView): string {
+  const views: { value: MessageListView; label: string }[] = [
+    { value: 'current', label: 'Current' },
+    { value: 'archived', label: 'Archived' },
+    { value: 'all', label: 'All messages' }
+  ];
+  const viewInput = `<input type="hidden" name="view" value="${view}">`;
+  const emptyMessage = view === 'archived' ? 'No archived messages.'
+    : view === 'all' ? 'No saved messages yet.'
+      : 'No current messages. Check the Archived view for archived messages.';
   const rows = messages.map((message) => `<tr>
     <td class="message-cell">${escapeHtml(message.body)}</td>
     <td>${renderBadge(message.status)}</td>
@@ -1063,21 +1083,24 @@ function renderMessages(messages: MessageRecord[]): string {
     <td>${renderPlatforms(message.platforms)}</td>
     <td>${renderTags(message.tags)}</td>
     <td class="actions">
-      <a class="action-button" href="/messages/${escapeHtml(message.id)}/edit">${icon('edit')}<span>Edit</span></a>
-      <form method="post" action="/messages/${escapeHtml(message.id)}/status"><input type="hidden" name="status" value="paused"><button class="action-button" onclick="return confirm('Pause this message? It will stop being selected for posting.')">${icon('pause')}<span>Pause</span></button></form>
-      <form method="post" action="/messages/${escapeHtml(message.id)}/status"><input type="hidden" name="status" value="approved"><button class="action-button">${icon('check')}<span>Approve</span></button></form>
-      <form method="post" action="/messages/${escapeHtml(message.id)}/status"><input type="hidden" name="status" value="archived"><button class="action-button" onclick="return confirm('Archive this message? It will be removed from the posting rotation.')">${icon('archive')}<span>Archive</span></button></form>
-      <form method="post" action="/messages/${escapeHtml(message.id)}/delete"><button class="action-button danger" onclick="return confirm('Permanently delete this message? This cannot be undone.')">${icon('trash')}<span>Delete</span></button></form>
+      <a class="action-button" href="/messages/${escapeHtml(message.id)}/edit?view=${view}">${icon('edit')}<span>Edit</span></a>
+      ${message.status === 'archived' ? '' : `<form method="post" action="/messages/${escapeHtml(message.id)}/status">${viewInput}<input type="hidden" name="status" value="paused"><button class="action-button" onclick="return confirm('Pause this message? It will stop being selected for posting.')">${icon('pause')}<span>Pause</span></button></form>
+      <form method="post" action="/messages/${escapeHtml(message.id)}/status">${viewInput}<input type="hidden" name="status" value="approved"><button class="action-button">${icon('check')}<span>Approve</span></button></form>
+      <form method="post" action="/messages/${escapeHtml(message.id)}/status">${viewInput}<input type="hidden" name="status" value="archived"><button class="action-button" onclick="return confirm('Archive this message? It will be removed from the posting rotation.')">${icon('archive')}<span>Archive</span></button></form>`}
+      <form method="post" action="/messages/${escapeHtml(message.id)}/delete">${viewInput}<button class="action-button danger" onclick="return confirm('Permanently delete this message? This cannot be undone.')">${icon('trash')}<span>Delete</span></button></form>
     </td>
   </tr>`).join('');
 
   return `<section class="content-panel">
     <div class="page-head"><div><h2>Messages</h2><p>Create, manage, and publish saved Bluesky posts.</p></div><a class="button primary" href="/messages/new">${icon('plus')}<span>New message</span></a></div>
-    <div class="section-body">${rows ? `<div class="table-wrap"><table><thead><tr><th>Message</th><th>Status</th><th>Weight</th><th>Cooldown</th><th>Posts</th><th>Length</th><th>Platforms</th><th>Tags</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No saved messages yet.</div>'}</div>
+    <div class="section-body">
+      <nav class="message-views" aria-label="Message views">${views.map(option => `<a class="button${option.value === view ? ' primary' : ''}" href="${messageListUrl(option.value)}"${option.value === view ? ' aria-current="page"' : ''}>${option.label}</a>`).join('')}</nav>
+      ${view === 'archived' ? '<p class="muted">Archived messages are excluded from posting. Delete them to remove their image references.</p>' : ''}
+      ${rows ? `<div class="table-wrap"><table><thead><tr><th>Message</th><th>Status</th><th>Weight</th><th>Cooldown</th><th>Posts</th><th>Length</th><th>Platforms</th><th>Tags</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty">${emptyMessage}</div>`}</div>
   </section>`;
 }
 
-function renderMessageForm(action: string, assets: AssetRecord[], message?: MessageRecord, assetOtherRefCount?: number): string {
+function renderMessageForm(action: string, assets: AssetRecord[], message?: MessageRecord, assetOtherRefCount?: number, view: MessageListView = 'current'): string {
   const assetOptions = [
     `<option value="">No image asset</option>`,
     ...assets.map((asset) => `<option value="${escapeHtml(asset.id)}"${message?.image_asset_id === asset.id ? ' selected' : ''}>${escapeHtml(asset.alt_text_default)} (${escapeHtml(asset.path_or_object_key ?? storageKindLabel(asset.storage_kind))})</option>`)
@@ -1093,6 +1116,7 @@ function renderMessageForm(action: string, assets: AssetRecord[], message?: Mess
     <div class="page-head"><div><h2>${message ? 'Edit' : 'New'} message</h2><p>Approved messages enter the scheduler pool. Drafts and paused messages stay out of rotation.</p></div></div>
     <div class="section-body">
       <form class="form-panel" method="post" action="${escapeHtml(action)}">
+        <input type="hidden" name="view" value="${view}">
         <div class="form-tools">
           <button type="button" class="button" id="generatePostBtn" onclick="generatePostSuggestion(event)">${icon('sparkles')}<span>Generate post</span></button>
           <span id="generatePostStatus" class="upload-status" aria-live="polite"></span>
@@ -1114,7 +1138,7 @@ function renderMessageForm(action: string, assets: AssetRecord[], message?: Mess
           <label class="full">Registered asset <select name="imageAssetId">${assetOptions}</select>${assetRefNote}</label>
           <label class="full">Image alt text <input name="imageAlt" value="${escapeHtml(message?.image_alt ?? '')}"></label>
         </div>
-        <div class="form-actions"><a class="button" href="/messages">Cancel</a><button class="button primary">${icon('save')}<span>Save</span></button></div>
+        <div class="form-actions"><a class="button" href="${messageListUrl(view)}">Cancel</a><button class="button primary">${icon('save')}<span>Save</span></button></div>
       </form>
     </div>
   </section>

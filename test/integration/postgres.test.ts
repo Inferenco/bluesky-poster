@@ -149,4 +149,42 @@ describeIfDb('Postgres-backed app flow', () => {
 
     await app.close();
   });
+
+  test('lists archived messages explicitly and releases their asset references on deletion', async () => {
+    const client = await pool.connect();
+    await client.query('begin');
+    try {
+      let messageId = 0;
+      const messages = new MessagesRepository(client, () => 'archive-fixture-' + ++messageId);
+      const assets = new AssetsRepository(client, () => 'archive-fixture-asset');
+      const asset = await assets.registerLocalImage({
+        pathOrObjectKey: path.join(process.cwd(), 'assets/images/originals/Nova1.jpg'),
+        altTextDefault: 'Archived message image'
+      });
+      const draft = await messages.create({ body: 'Archive test draft', status: 'draft' });
+      const approved = await messages.create({ body: 'Archive test approved', status: 'approved' });
+      const paused = await messages.create({ body: 'Archive test paused', status: 'paused' });
+      const archived = await messages.create({ body: 'Archive test archived', status: 'archived', imageAssetId: asset.id });
+
+      const current = await messages.list();
+      expect(current.map(message => message.id)).toEqual(expect.arrayContaining([draft.id, approved.id, paused.id]));
+      expect(current.some(message => message.status === 'archived')).toBe(false);
+      const archive = await messages.list('archived');
+      expect(archive.every(message => message.status === 'archived')).toBe(true);
+      expect(archive).toEqual(expect.arrayContaining([expect.objectContaining({ id: archived.id, image_asset_id: asset.id })]));
+      const all = await messages.list('all');
+      expect(all.map(message => message.id)).toEqual(expect.arrayContaining([draft.id, approved.id, paused.id, archived.id]));
+      expect(await messages.countReferencingAsset(asset.id)).toBe(1);
+
+      await messages.delete(archived.id);
+      expect(await messages.get(archived.id)).toBeNull();
+      expect(await messages.countReferencingAsset(asset.id)).toBe(0);
+      await assets.delete(asset.id);
+      expect(await assets.get(asset.id)).toBeNull();
+    } finally {
+      await client.query('rollback');
+      client.release();
+    }
+  });
+
 });

@@ -127,7 +127,8 @@ function repositories(): AppRepositories {
 
   return {
     messages: {
-      list: async () => Array.from(messages.values()),
+      list: async (view = 'current') => Array.from(messages.values()).filter(message =>
+        view === 'all' || (view === 'archived' ? message.status === 'archived' : message.status !== 'archived')),
       get: async (id) => messages.get(id) ?? null,
       create: async (input) => {
         const message = makeMessage({
@@ -460,6 +461,113 @@ describe('dashboard routes', () => {
     await app.close();
   });
 
+  test.each([
+    ['', ['draft', 'approved', 'paused'], 'current'],
+    ['?view=current', ['draft', 'approved', 'paused'], 'current'],
+    ['?view=archived', ['archived'], 'archived'],
+    ['?view=all', ['draft', 'approved', 'paused', 'archived'], 'all'],
+    ['?view=unknown', ['draft', 'approved', 'paused'], 'current']
+  ])('shows the selected message view: %s', async (query, visibleStatuses, selectedView) => {
+    const repos = repositories();
+    const statuses: MessageStatus[] = ['draft', 'approved', 'paused', 'archived'];
+    for (const status of statuses) {
+      await repos.messages.create({ body: 'Saved fixture: ' + status, status });
+    }
+    const { app, authHeaders } = await makeApp({ repositories: repos });
+
+    const page = await app.inject({ method: 'GET', url: '/messages' + query, headers: authHeaders });
+
+    expect(page.statusCode).toBe(200);
+    for (const status of statuses) {
+      if (visibleStatuses.includes(status)) expect(page.body).toContain('Saved fixture: ' + status);
+      else expect(page.body).not.toContain('Saved fixture: ' + status);
+    }
+    const selectedUrl = selectedView === 'current' ? '/messages' : '/messages?view=' + selectedView;
+    expect(page.body).toContain('href="' + selectedUrl + '" aria-current="page"');
+    expect(page.body).toContain('href="/messages?view=archived"');
+    expect(page.body).toContain('href="/messages?view=all"');
+    await app.close();
+  });
+
+  test('finds and deletes archived messages before allowing deletion of their shared asset', async () => {
+    const repos = repositories();
+    const asset = await repos.assets.registerLocalImage({ pathOrObjectKey: 'test.jpg', altTextDefault: 'Shared archived image' });
+    const first = await repos.messages.create({ body: 'First archived fixture', status: 'approved', imageAssetId: asset.id });
+    const second = await repos.messages.create({ body: 'Second archived fixture', status: 'archived', imageAssetId: asset.id });
+    const { app, authHeaders } = await makeApp({ repositories: repos });
+    const formHeaders = { ...authHeaders, 'content-type': 'application/x-www-form-urlencoded' };
+
+    const archived = await app.inject({
+      method: 'POST', url: '/messages/' + first.id + '/status', headers: formHeaders, payload: 'status=archived'
+    });
+    expect(archived.headers.location).toBe('/messages');
+    const current = await app.inject({ method: 'GET', url: '/messages', headers: authHeaders });
+    expect(current.body).not.toContain('First archived fixture');
+
+    const archive = await app.inject({ method: 'GET', url: '/messages?view=archived', headers: authHeaders });
+    expect(archive.body).toContain('First archived fixture');
+    expect(archive.body).toContain('Second archived fixture');
+    expect(archive.body).toContain('action="/messages/' + first.id + '/delete"');
+    expect(archive.body).toContain('name="view" value="archived"');
+    expect(archive.body).not.toContain('name="status" value="approved"');
+
+    const blocked = await app.inject({ method: 'POST', url: '/assets/' + asset.id + '/delete', headers: authHeaders });
+    expect(decodeURIComponent(blocked.headers.location!)).toContain('2 messages are still using this asset');
+    expect(decodeURIComponent(blocked.headers.location!)).toContain('Current and Archived');
+
+    const deleted = await app.inject({
+      method: 'POST', url: '/messages/' + first.id + '/delete', headers: formHeaders, payload: 'view=archived'
+    });
+    expect(deleted.headers.location).toBe('/messages?view=archived');
+    expect(await repos.messages.get(first.id)).toBeNull();
+    const stillBlocked = await app.inject({ method: 'POST', url: '/assets/' + asset.id + '/delete', headers: authHeaders });
+    expect(decodeURIComponent(stillBlocked.headers.location!)).toContain('1 message is still using this asset');
+    expect(await repos.assets.get(asset.id)).not.toBeNull();
+
+    await app.inject({ method: 'POST', url: '/messages/' + second.id + '/delete', headers: formHeaders, payload: 'view=archived' });
+    const empty = await app.inject({ method: 'GET', url: '/messages?view=archived', headers: authHeaders });
+    expect(empty.body).toContain('No archived messages.');
+    const deletedAsset = await app.inject({ method: 'POST', url: '/assets/' + asset.id + '/delete', headers: authHeaders });
+    expect(deletedAsset.headers.location).toBe('/assets');
+    expect(await repos.assets.get(asset.id)).toBeNull();
+    await app.close();
+  });
+
+  test.each(['archived', 'all'])('preserves the %s view through message editing and deletion', async view => {
+    const repos = repositories();
+    const message = await repos.messages.create({ body: 'Archived edit fixture', status: 'archived' });
+    const { app, authHeaders } = await makeApp({ repositories: repos });
+    const formHeaders = { ...authHeaders, 'content-type': 'application/x-www-form-urlencoded' };
+    const edit = await app.inject({
+      method: 'GET', url: '/messages/' + message.id + '/edit?view=' + view, headers: authHeaders
+    });
+    expect(edit.body).toContain('name="view" value="' + view + '"');
+    expect(edit.body).toContain('href="/messages?view=' + view + '">Cancel</a>');
+
+    const saved = await app.inject({
+      method: 'POST', url: '/messages/' + message.id, headers: formHeaders,
+      payload: 'body=Edited+archived+fixture&status=archived&view=' + view
+    });
+    expect(saved.headers.location).toBe('/messages?view=' + view);
+    const deleted = await app.inject({
+      method: 'POST', url: '/messages/' + message.id + '/delete', headers: formHeaders, payload: 'view=' + view
+    });
+    expect(deleted.headers.location).toBe('/messages?view=' + view);
+    await app.close();
+  });
+
+  test('requires authentication to view or delete archived messages', async () => {
+    const repos = repositories();
+    const message = await repos.messages.create({ body: 'Private archived fixture', status: 'archived' });
+    const app = await buildApp({ config: testConfig, repositories: repos });
+    const page = await app.inject({ method: 'GET', url: '/messages?view=archived' });
+    expect(page.body).toContain('Connect your Cedra wallet');
+    expect(page.body).not.toContain(message.body);
+    await app.inject({ method: 'POST', url: '/messages/' + message.id + '/delete' });
+    expect(await repos.messages.get(message.id)).not.toBeNull();
+    await app.close();
+  });
+
   test('renders platform checkboxes and defaults new messages to Bluesky', async () => {
     const repos = repositories();
     const { app, authHeaders } = await makeApp({ repositories: repos });
@@ -530,7 +638,7 @@ describe('dashboard routes', () => {
     });
 
     const list = await app.inject({ method: 'GET', url: '/messages', headers: authHeaders });
-    expect(list.body).toContain('No saved messages yet.');
+    expect(list.body).toContain('No current messages.');
 
     await app.close();
   });
